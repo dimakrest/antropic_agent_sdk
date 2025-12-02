@@ -360,3 +360,44 @@ def test_chat_error_during_execution(test_client, mock_sdk_client):
         data = response.json()
         assert data["status"] == "error_during_execution"
         assert data["error"] is not None
+
+
+def test_chat_invalid_session_id_returns_404(test_client):
+    """Test that providing a non-existent session_id returns 404"""
+    response = test_client.post("/chat", json={
+        "session_id": "non-existent-session-id",
+        "message": "Hello Claude"
+    })
+
+    assert response.status_code == 404
+    data = response.json()
+    assert "not found" in data["detail"].lower()
+
+
+def test_chat_with_allowed_tools(test_client, mock_sdk_client):
+    """Test chat with allowed_tools parameter"""
+    with patch('server.session_manager.client_factory', return_value=mock_sdk_client):
+        response = test_client.post("/chat", json={
+            "message": "Hello Claude",
+            "allowed_tools": ["Read", "Write", "Edit"]
+        })
+
+        assert response.status_code == 200
+        data = response.json()
+        assert data["status"] == "success"
+
+
+@pytest.mark.asyncio
+async def test_session_manager_require_existing_raises_error():
+    """Test SessionManager raises error for non-existent session when require_existing=True"""
+    manager = SessionManager()
+
+    with pytest.raises(ValueError) as exc_info:
+        await manager.get_or_create_session(
+            session_id="non-existent-session",
+            permission_mode="default",
+            max_turns=10,
+            require_existing=True
+        )
+
+    assert "not found" in str(exc_info.value).lower()

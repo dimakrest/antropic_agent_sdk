@@ -81,27 +81,36 @@ class IntegrationTester:
         """Test 4: Verify agent can use tools (file operations)"""
         print("\nTest 4: Tool Usage")
 
-        # Ask Claude to create a file
-        resp = self.client.post("/chat", json={
-            "message": "Create a file called test_output.txt with the content 'Hello from Claude'. Use the Write tool.",
-            "permission_mode": "acceptEdits"  # Auto-approve file writes
-        })
-        assert resp.status_code == 200
-        session_id = resp.json()["session_id"]
+        test_file = "test_output.txt"
+        session_id = None
 
-        print(f"Claude executed (session: {session_id})")
+        try:
+            # Ask Claude to create a file
+            resp = self.client.post("/chat", json={
+                "message": f"Create a file called {test_file} with the content 'Hello from Claude'. Use the Write tool.",
+                "permission_mode": "acceptEdits"  # Auto-approve file writes
+            })
+            assert resp.status_code == 200
+            session_id = resp.json()["session_id"]
 
-        # Verify file exists
-        if os.path.exists("test_output.txt"):
-            with open("test_output.txt", "r") as f:
-                content = f.read()
-            print(f"File created with content: {content}")
-            os.remove("test_output.txt")  # Cleanup
-        else:
-            print("File wasn't created (check tool permissions)")
+            print(f"Claude executed (session: {session_id})")
 
-        # Clean up session
-        self.client.delete(f"/sessions/{session_id}")
+            # Verify file exists
+            if os.path.exists(test_file):
+                with open(test_file, "r") as f:
+                    content = f.read()
+                print(f"File created with content: {content}")
+            else:
+                print("File wasn't created (check tool permissions)")
+
+        finally:
+            # Always clean up test file if it exists
+            if os.path.exists(test_file):
+                os.remove(test_file)
+
+            # Clean up session if created
+            if session_id:
+                self.client.delete(f"/sessions/{session_id}")
 
     def test_error_handling(self):
         """Test 5: Error handling for invalid requests"""

@@ -159,22 +159,44 @@ class SessionManager:
         permission_mode: str,
         max_turns: int,
         allowed_tools: Optional[List[str]] = None,
+        require_existing: bool = False,
     ) -> tuple[str, ClaudeSDKClient]:
-        """Get existing session or create new one"""
+        """
+        Get existing session or create new one.
+
+        Args:
+            session_id: Optional session ID to continue
+            permission_mode: Permission mode for the session
+            max_turns: Maximum conversation turns
+            allowed_tools: List of tools the agent can use
+            require_existing: If True, raises error when session_id not found
+
+        Returns:
+            Tuple of (session_id, client)
+
+        Raises:
+            ValueError: If require_existing=True and session_id not found
+        """
 
         # Return existing session if valid
         if session_id and session_id in self.sessions:
             self.session_activity[session_id] = datetime.now()
             return session_id, self.sessions[session_id]
 
+        # If session_id was provided but not found, and we require existing
+        if session_id and require_existing:
+            raise ValueError(f"Session not found: {session_id}")
+
         # Create new session
         new_session_id = str(uuid.uuid4())
 
-        # Configure SDK options
+        # Configure SDK options with allowed_tools if provided
         options = ClaudeAgentOptions(
             model=DEFAULT_MODEL,
             permission_mode=permission_mode,
             max_turns=max_turns,
+            allowed_tools=allowed_tools,
+            can_use_tool=default_can_use_tool if permission_mode == "default" else None,
         )
 
         # Create and connect SDK client
@@ -306,14 +328,20 @@ async def chat(request: ChatRequest):
 
     Creates a new session if session_id is not provided.
     Continues existing conversation if session_id is provided.
+    Returns 404 if session_id is provided but not found.
     """
-    # Get or create session
-    session_id, client = await session_manager.get_or_create_session(
-        session_id=request.session_id,
-        permission_mode=request.permission_mode or DEFAULT_PERMISSION_MODE,
-        max_turns=request.max_turns or MAX_TURNS,
-        allowed_tools=request.allowed_tools
-    )
+    try:
+        # Get or create session
+        # If session_id is provided, require it to exist (returns 404 if not found)
+        session_id, client = await session_manager.get_or_create_session(
+            session_id=request.session_id,
+            permission_mode=request.permission_mode or DEFAULT_PERMISSION_MODE,
+            max_turns=request.max_turns or MAX_TURNS,
+            allowed_tools=request.allowed_tools,
+            require_existing=request.session_id is not None,
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
 
     try:
         # Send query to SDK
