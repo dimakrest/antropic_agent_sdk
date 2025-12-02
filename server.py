@@ -3,15 +3,16 @@ HTTP Server Interface for Claude Agent SDK
 A FastAPI-based REST API that exposes the Claude Agent SDK.
 """
 
+import asyncio
+import os
+import uuid
 from contextlib import asynccontextmanager
+from datetime import datetime, timedelta
+from typing import Dict, List, Optional
+
+from dotenv import load_dotenv
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel, Field
-from typing import Dict, Optional, List, Any
-from datetime import datetime, timedelta
-import asyncio
-import uuid
-import os
-from dotenv import load_dotenv
 from claude_agent_sdk import (
     ClaudeSDKClient,
     ClaudeAgentOptions,

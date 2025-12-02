@@ -172,25 +172,43 @@ uv run python tests/integration_test.py
 import httpx
 
 client = httpx.Client(base_url="http://localhost:8000", timeout=120)
+session_id = None
 
-# Start conversation
-response = client.post("/chat", json={
-    "message": "Help me write a Python function"
-})
+try:
+    # Start conversation
+    response = client.post("/chat", json={
+        "message": "Help me write a Python function"
+    })
+    response.raise_for_status()
+    data = response.json()
 
-session_id = response.json()["session_id"]
-print(response.json()["response_text"])
+    if data["status"] != "success":
+        raise Exception(f"Agent error: {data.get('error')}")
 
-# Continue conversation
-response = client.post("/chat", json={
-    "session_id": session_id,
-    "message": "Now add error handling to that function"
-})
+    session_id = data["session_id"]
+    print(data["response_text"])
 
-print(response.json()["response_text"])
+    # Continue conversation
+    response = client.post("/chat", json={
+        "session_id": session_id,
+        "message": "Now add error handling to that function"
+    })
+    response.raise_for_status()
+    data = response.json()
 
-# Clean up
-client.delete(f"/sessions/{session_id}")
+    if data["status"] != "success":
+        raise Exception(f"Agent error: {data.get('error')}")
+
+    print(data["response_text"])
+
+except httpx.HTTPStatusError as e:
+    print(f"HTTP error: {e.response.status_code} - {e.response.text}")
+except httpx.RequestError as e:
+    print(f"Request failed: {e}")
+finally:
+    # Clean up session
+    if session_id:
+        client.delete(f"/sessions/{session_id}")
 ```
 
 ## Architecture
