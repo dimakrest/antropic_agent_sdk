@@ -2,12 +2,14 @@
 Stock Tools - Custom MCP tools for stock price data.
 """
 
+import os
+
 import httpx
 from claude_agent_sdk import tool, create_sdk_mcp_server
 from typing import Any
 
 # Stock Prices API configuration
-STOCK_API_BASE_URL = "http://localhost:8093"
+STOCK_API_BASE_URL = os.getenv("STOCK_API_BASE_URL", "http://localhost:8093")
 STOCK_API_TIMEOUT = 30.0  # seconds
 
 
