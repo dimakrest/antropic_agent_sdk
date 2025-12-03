@@ -20,6 +20,7 @@ from claude_agent_sdk import (
     ResultMessage,
 )
 from claude_agent_sdk.types import TextBlock
+from stock_tools import stock_tools_server
 
 # Load environment variables
 load_dotenv()
@@ -121,6 +122,10 @@ async def default_can_use_tool(tool_name: str, tool_input: dict) -> bool:
     if tool_name in ["Read", "Grep", "Glob"]:
         return True
 
+    # Allow stock tools (read-only data fetching)
+    if tool_name.startswith("mcp__stock-tools__"):
+        return True
+
     # Allow write tools (user specified acceptEdits or bypassPermissions)
     # Note: This is called only in 'default' mode
     if tool_name in ["Write", "Edit"]:
@@ -197,6 +202,7 @@ class SessionManager:
             permission_mode=permission_mode,
             max_turns=max_turns,
             allowed_tools=allowed_tools,
+            mcp_servers={"stock-tools": stock_tools_server},
             can_use_tool=default_can_use_tool if permission_mode == "default" else None,
         )
 
