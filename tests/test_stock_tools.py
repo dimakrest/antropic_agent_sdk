@@ -7,11 +7,6 @@ Run all tests:  uv run pytest tests/test_stock_tools.py -v
 
 import pytest
 import httpx
-import sys
-import os
-
-# Add parent directory to path for imports
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from stock_tools import get_stock_data, calculate_position_size
 
@@ -311,6 +306,41 @@ class TestGetStockDataUnit:
 
         assert "error" in result
         assert "500" in result["error"]
+
+    @pytest.mark.asyncio
+    async def test_empty_symbol(self):
+        """Empty symbol should return error without API call"""
+        result = await get_stock_data("")
+
+        assert "error" in result
+        assert "non-empty string" in result["error"].lower()
+
+    @pytest.mark.asyncio
+    async def test_none_symbol(self):
+        """None symbol should return error without API call"""
+        result = await get_stock_data(None)
+
+        assert "error" in result
+        assert "non-empty string" in result["error"].lower()
+
+    @pytest.mark.asyncio
+    async def test_symbol_normalized_to_uppercase(self, mock_analysis_api_response, mocker):
+        """Symbol should be normalized to uppercase"""
+        mock_response = mocker.Mock()
+        mock_response.json.return_value = mock_analysis_api_response
+        mock_response.status_code = 200
+
+        mock_client = mocker.AsyncMock()
+        mock_client.get.return_value = mock_response
+        mock_client.__aenter__.return_value = mock_client
+        mock_client.__aexit__.return_value = None
+
+        mocker.patch("httpx.AsyncClient", return_value=mock_client)
+
+        await get_stock_data("aapl")
+
+        call_args = mock_client.get.call_args
+        assert "AAPL" in call_args.args[0]
 
     @pytest.mark.asyncio
     async def test_default_parameters(self, mock_analysis_api_response, mocker):

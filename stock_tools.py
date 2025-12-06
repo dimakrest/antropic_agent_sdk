@@ -5,14 +5,24 @@ MCP tool functions for fetching stock data from the Technical Analysis API
 and calculating position sizes.
 """
 
+import os
+from typing import Any
+
 import httpx
+from dotenv import load_dotenv
+
+load_dotenv()
+
+TECHNICAL_ANALYSIS_API_URL = os.getenv(
+    "TECHNICAL_ANALYSIS_API_URL", "http://localhost:8093"
+)
 
 
 async def get_stock_data(
     symbol: str,
     period: str = "3mo",
     interval: str = "1d"
-) -> dict:
+) -> dict[str, Any]:
     """
     Fetch stock data with technical analysis from API.
 
@@ -27,7 +37,12 @@ async def get_stock_data(
               support/resistance levels, and recent candles.
               Returns {"error": "..."} on failure.
     """
-    url = f"http://localhost:8093/api/v1/stocks/{symbol}/analysis"
+    if not symbol or not isinstance(symbol, str):
+        return {"error": "Symbol must be a non-empty string"}
+
+    symbol = symbol.upper().strip()
+
+    url = f"{TECHNICAL_ANALYSIS_API_URL}/api/v1/stocks/{symbol}/analysis"
 
     try:
         async with httpx.AsyncClient() as client:
@@ -43,7 +58,7 @@ async def get_stock_data(
 
             return response.json()
     except httpx.ConnectError:
-        return {"error": "Technical Analysis API unavailable at localhost:8093"}
+        return {"error": f"Technical Analysis API unavailable at {TECHNICAL_ANALYSIS_API_URL}"}
 
 
 def calculate_position_size(
@@ -51,7 +66,7 @@ def calculate_position_size(
     risk_percent: float,
     entry_price: float,
     stop_loss_price: float
-) -> dict:
+) -> dict[str, Any]:
     """
     Calculate position size based on account risk parameters.
 
