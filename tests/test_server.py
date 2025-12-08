@@ -15,7 +15,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from server import app, SessionManager, session_manager
 from claude_agent_sdk import AssistantMessage, ResultMessage
-from claude_agent_sdk.types import TextBlock
+from claude_agent_sdk.types import TextBlock, ToolUseBlock
 
 
 @pytest.fixture
@@ -42,14 +42,59 @@ def mock_sdk_client():
         )
         yield assistant_msg
 
-        # Simulate result message with proper SDK types
+        # Simulate result message with proper SDK types and usage
         result_msg = ResultMessage(
             subtype="success",
             duration_ms=100,
             duration_api_ms=50,
             is_error=False,
             num_turns=1,
-            session_id="test-session"
+            session_id="test-session",
+            usage={
+                "input_tokens": 100,
+                "output_tokens": 50
+            }
+        )
+        yield result_msg
+
+    mock.receive_response = mock_receive_response
+    return mock
+
+
+@pytest.fixture
+def mock_sdk_client_with_tools():
+    """Create mock ClaudeSDKClient with tool usage"""
+    mock = AsyncMock()
+    mock.connect = AsyncMock()
+    mock.query = AsyncMock()
+    mock.disconnect = AsyncMock()
+    mock.interrupt = AsyncMock()
+
+    async def mock_receive_response():
+        # Simulate assistant message with tool use
+        assistant_msg = AssistantMessage(
+            content=[
+                ToolUseBlock(id="tool_1", name="Read", input={"path": "/test"}),
+                ToolUseBlock(id="tool_2", name="Read", input={"path": "/test2"}),
+                ToolUseBlock(id="tool_3", name="Bash", input={"command": "ls"}),
+                TextBlock(text="This is a test response from Claude")
+            ],
+            model="claude-sonnet-4-5-20250929"
+        )
+        yield assistant_msg
+
+        # Simulate result message with usage
+        result_msg = ResultMessage(
+            subtype="success",
+            duration_ms=100,
+            duration_api_ms=50,
+            is_error=False,
+            num_turns=1,
+            session_id="test-session",
+            usage={
+                "input_tokens": 150,
+                "output_tokens": 75
+            }
         )
         yield result_msg
 
@@ -401,3 +446,173 @@ async def test_session_manager_require_existing_raises_error():
         )
 
     assert "not found" in str(exc_info.value).lower()
+
+
+def test_chat_response_includes_metadata(test_client, mock_sdk_client_with_tools):
+    """Test that chat response includes metadata with model, usage, and tools"""
+    with patch('server.session_manager.client_factory', return_value=mock_sdk_client_with_tools):
+        response = test_client.post("/chat", json={
+            "message": "Hello Claude"
+        })
+
+        assert response.status_code == 200
+        data = response.json()
+        assert data["status"] == "success"
+
+        # Verify metadata structure
+        assert "metadata" in data
+        metadata = data["metadata"]
+
+        # Verify model
+        assert metadata["model"] == "claude-sonnet-4-5-20250929"
+
+        # Verify user_prompt
+        assert metadata["user_prompt"] == "Hello Claude"
+
+        # Verify usage
+        assert "usage" in metadata
+        assert metadata["usage"]["input_tokens"] == 150
+        assert metadata["usage"]["output_tokens"] == 75
+
+        # Verify tool_calls with params and counts
+        assert "tool_calls" in metadata
+        tool_calls = metadata["tool_calls"]
+        assert len(tool_calls) == 3  # Read /test, Read /test2, Bash ls
+
+        # Find specific tool calls
+        read_calls = [tc for tc in tool_calls if tc["name"] == "Read"]
+        bash_calls = [tc for tc in tool_calls if tc["name"] == "Bash"]
+        assert len(read_calls) == 2  # Two different paths
+        assert len(bash_calls) == 1
+        assert bash_calls[0]["input"] == {"command": "ls"}
+        assert bash_calls[0]["count"] == 1
+
+
+def test_chat_response_backward_compatible(test_client, mock_sdk_client):
+    """Test that existing response fields still work"""
+    with patch('server.session_manager.client_factory', return_value=mock_sdk_client):
+        response = test_client.post("/chat", json={
+            "message": "Hello Claude"
+        })
+
+        assert response.status_code == 200
+        data = response.json()
+
+        # All original fields should still be present
+        assert "session_id" in data
+        assert "status" in data
+        assert "response_text" in data
+        assert "conversation_turns" in data
+        # error is optional, may be null
+
+
+def test_chat_response_metadata_without_tools(test_client, mock_sdk_client):
+    """Test that metadata is present even when no tools are used"""
+    with patch('server.session_manager.client_factory', return_value=mock_sdk_client):
+        response = test_client.post("/chat", json={
+            "message": "Hello Claude"
+        })
+
+        assert response.status_code == 200
+        data = response.json()
+
+        # Metadata should be present
+        assert "metadata" in data
+        metadata = data["metadata"]
+
+        # Model should be set
+        assert metadata["model"] == "claude-sonnet-4-5-20250929"
+
+        # Usage should be present
+        assert metadata["usage"]["input_tokens"] == 100
+        assert metadata["usage"]["output_tokens"] == 50
+
+        # tool_calls should be empty list when no tools were used
+        assert metadata["tool_calls"] == []
+
+
+@pytest.fixture
+def mock_sdk_client_for_analyze():
+    """Create mock ClaudeSDKClient for /analyze endpoint with structured output"""
+    mock = AsyncMock()
+    mock.connect = AsyncMock()
+    mock.query = AsyncMock()
+    mock.disconnect = AsyncMock()
+
+    async def mock_receive_response():
+        # Simulate assistant message with MCP tool use
+        assistant_msg = AssistantMessage(
+            content=[
+                ToolUseBlock(id="tool_1", name="mcp__stock_analysis__get_stock_data", input={"symbol": "TEST"}),
+                TextBlock(text="Analyzing stock data...")
+            ],
+            model="claude-sonnet-4-5-20250929"
+        )
+        yield assistant_msg
+
+        # Simulate result message with structured output
+        result_msg = ResultMessage(
+            subtype="success",
+            duration_ms=200,
+            duration_api_ms=150,
+            is_error=False,
+            num_turns=2,
+            session_id="test-analyze-session",
+            usage={
+                "input_tokens": 500,
+                "output_tokens": 200
+            }
+        )
+        # Add structured output
+        result_msg.structured_output = {
+            "stock": "TEST",
+            "recommendation": "Buy",
+            "entry_price": 100.0,
+            "stop_loss": 95.0,
+            "take_profit": 110.0,
+            "reasoning": "Test analysis",
+            "missing_tools": [],
+            "confidence_score": 75
+        }
+        yield result_msg
+
+    mock.receive_response = mock_receive_response
+    return mock
+
+
+def test_analyze_response_includes_metadata(test_client, mock_sdk_client_for_analyze):
+    """Test that /analyze response includes metadata with model, usage, and tools"""
+    with patch('server.ClaudeSDKClient', return_value=mock_sdk_client_for_analyze):
+        response = test_client.post("/analyze", json={
+            "stock": "TEST"
+        })
+
+        assert response.status_code == 200
+        data = response.json()
+        assert data["recommendation"] == "Buy"
+
+        # Verify metadata structure
+        assert "metadata" in data
+        metadata = data["metadata"]
+
+        # Verify model
+        assert metadata["model"] == "claude-sonnet-4-5-20250929"
+
+        # Verify usage
+        assert "usage" in metadata
+        assert metadata["usage"]["input_tokens"] == 500
+        assert metadata["usage"]["output_tokens"] == 200
+
+        # Verify tool_calls includes MCP tool with params
+        assert "tool_calls" in metadata
+        tool_calls = metadata["tool_calls"]
+        assert len(tool_calls) == 1
+        assert tool_calls[0]["name"] == "mcp__stock_analysis__get_stock_data"
+        assert tool_calls[0]["input"] == {"symbol": "TEST"}
+        assert tool_calls[0]["count"] == 1
+
+        # Verify system_prompt and user_prompt are present
+        assert "system_prompt" in metadata
+        assert metadata["system_prompt"] is not None  # Should have swing trading prompt
+        assert "user_prompt" in metadata
+        assert "TEST" in metadata["user_prompt"]  # User prompt should contain the stock symbol

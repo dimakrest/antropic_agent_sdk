@@ -4,11 +4,12 @@ A FastAPI-based REST API that exposes the Claude Agent SDK.
 """
 
 import asyncio
+import json
 import os
 import uuid
 from contextlib import asynccontextmanager
 from datetime import datetime, timedelta
-from typing import Dict, List, Optional
+from typing import Any, Dict, List, Optional
 
 from dotenv import load_dotenv
 from fastapi import FastAPI, HTTPException
@@ -19,7 +20,8 @@ from claude_agent_sdk import (
     AssistantMessage,
     ResultMessage,
 )
-from claude_agent_sdk.types import TextBlock
+from claude_agent_sdk.types import TextBlock, ToolUseBlock
+from stock_tools import stock_tools_server
 
 # Load environment variables
 load_dotenv()
@@ -70,6 +72,31 @@ class ChatRequest(BaseModel):
     )
 
 
+class UsageInfo(BaseModel):
+    """Token usage information"""
+    input_tokens: int = Field(..., description="Number of input tokens consumed")
+    output_tokens: int = Field(..., description="Number of output tokens generated")
+
+
+class ToolCall(BaseModel):
+    """Single tool call with parameters"""
+    name: str = Field(..., description="Tool name")
+    input: Dict[str, Any] = Field(..., description="Tool parameters")
+    count: int = Field(1, description="Number of times this exact call was made")
+
+
+class ResponseMetadata(BaseModel):
+    """Metadata about the agent response"""
+    model: Optional[str] = Field(None, description="Model used for the response")
+    system_prompt: Optional[str] = Field(None, description="System prompt used")
+    user_prompt: Optional[str] = Field(None, description="User prompt sent")
+    usage: Optional[UsageInfo] = Field(None, description="Token usage statistics")
+    tool_calls: List[ToolCall] = Field(
+        default_factory=list,
+        description="Tools called with parameters and count"
+    )
+
+
 class ChatResponse(BaseModel):
     """Response model for chat endpoint"""
     session_id: str = Field(..., description="Session ID for continuing conversation")
@@ -77,6 +104,7 @@ class ChatResponse(BaseModel):
     response_text: Optional[str] = Field(None, description="Agent's text response")
     error: Optional[str] = Field(None, description="Error message if status != success")
     conversation_turns: int = Field(0, description="Number of turns in this response")
+    metadata: Optional[ResponseMetadata] = Field(None, description="Response metadata including model, usage, and tools")
 
 
 class SessionDeleteResponse(BaseModel):
@@ -102,6 +130,128 @@ class SessionListResponse(BaseModel):
     """Response model for session list"""
     active_sessions: int
     sessions: List[SessionInfo]
+
+
+# =============================================================================
+# Swing Trading Agent Models
+# =============================================================================
+
+class AnalyzeRequest(BaseModel):
+    """Request model for swing trading analysis"""
+    stock: str = Field(
+        ...,
+        min_length=1,
+        max_length=10,
+        description="Stock ticker symbol (e.g., 'AAPL', 'MSFT')"
+    )
+
+
+class AnalyzeResponse(BaseModel):
+    """Response model for swing trading analysis"""
+    stock: str = Field(..., description="The input ticker symbol")
+    recommendation: str = Field(
+        ...,
+        description="Trading recommendation: 'Buy' or 'Not Buy'"
+    )
+    entry_price: float = Field(..., description="Recommended entry price")
+    stop_loss: float = Field(..., description="Stop loss price level")
+    take_profit: float = Field(..., description="Take profit target price")
+    reasoning: str = Field(
+        ...,
+        description="Professional analysis explaining the decision"
+    )
+    missing_tools: List[str] = Field(
+        ...,
+        description="Indicators/data that would increase confidence"
+    )
+    confidence_score: int = Field(
+        ...,
+        ge=0,
+        le=100,
+        description="Confidence in the recommendation (0-100)"
+    )
+    metadata: Optional[ResponseMetadata] = Field(
+        None,
+        description="Response metadata including model, usage, and tools"
+    )
+
+
+# JSON Schema for structured output (matches AnalyzeResponse)
+TRADING_RECOMMENDATION_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "stock": {"type": "string"},
+        "recommendation": {
+            "type": "string",
+            "enum": ["Buy", "Not Buy"]
+        },
+        "entry_price": {"type": "number"},
+        "stop_loss": {"type": "number"},
+        "take_profit": {"type": "number"},
+        "reasoning": {"type": "string"},
+        "missing_tools": {
+            "type": "array",
+            "items": {"type": "string"}
+        },
+        "confidence_score": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 100
+        }
+    },
+    "required": [
+        "stock",
+        "recommendation",
+        "entry_price",
+        "stop_loss",
+        "take_profit",
+        "reasoning",
+        "missing_tools",
+        "confidence_score"
+    ],
+    "additionalProperties": False
+}
+
+
+SWING_TRADING_SYSTEM_PROMPT = """You are a professional swing trader specializing in short-term trades with 3-5 day holding periods.
+
+## Your Role
+You ARE the trading expert. Apply your own trading expertise and judgment to analyze stocks and provide actionable recommendations.
+
+## Analysis Process
+1. ALWAYS use the get_stock_data tool to fetch current technical analysis data
+2. Analyze the data using your trading expertise
+3. Make a binary decision: Buy or Not Buy (no "Hold" or "Maybe")
+4. Provide specific price levels for entry, stop loss, and take profit
+
+## Decision Framework
+- Focus on swing trade setups with 3-5 day holding period
+- Favor favorable risk/reward ratios (ideally 2:1 or better)
+- Always set a stop loss - risk management is non-negotiable
+- Consider trend direction, momentum, and key support/resistance levels
+
+## Key Indicators to Consider
+- RSI: Look for momentum confirmation (not overbought >70 or oversold <30 for entries)
+- MACD: Trend direction and potential crossovers
+- Moving Averages: Price relative to 20, 50, 200 SMA for trend context
+- Support/Resistance: Key levels for entry and stop placement
+- Volume: Confirmation of price moves
+- ATR: For appropriate stop loss and target distance
+
+## Output Requirements
+- recommendation: "Buy" or "Not Buy" - binary decision only
+- entry_price: Specific price (can be current price for immediate entry or limit near support)
+- stop_loss: Below recent support or based on ATR
+- take_profit: Based on resistance levels or risk/reward calculation
+- reasoning: Professional analysis explaining your decision (2-4 sentences)
+- missing_tools: What additional data would improve your analysis
+- confidence_score: 0-100 based on signal alignment (informational only)
+
+## Important Notes
+- If data is unavailable or insufficient, recommend "Not Buy" with reasoning
+- Never recommend buying without proper risk/reward setup
+- Be conservative with confidence scores - reserve >80 for very clear setups
+"""
 
 
 # =============================================================================
@@ -322,6 +472,30 @@ async def root():
     }
 
 
+def _build_metadata(
+    model_used: Optional[str],
+    tool_calls: List[Dict[str, Any]],
+    result_message: Optional[ResultMessage],
+    system_prompt: Optional[str] = None,
+    user_prompt: Optional[str] = None
+) -> ResponseMetadata:
+    """Build response metadata from collected data"""
+    usage_info = None
+    if result_message and result_message.usage:
+        usage_info = UsageInfo(
+            input_tokens=result_message.usage.get("input_tokens", 0),
+            output_tokens=result_message.usage.get("output_tokens", 0)
+        )
+
+    return ResponseMetadata(
+        model=model_used,
+        system_prompt=system_prompt,
+        user_prompt=user_prompt,
+        usage=usage_info,
+        tool_calls=[ToolCall(**tc) for tc in tool_calls]
+    )
+
+
 @app.post("/chat", response_model=ChatResponse)
 async def chat(request: ChatRequest):
     """
@@ -351,6 +525,9 @@ async def chat(request: ChatRequest):
         # Collect response messages
         response_text_parts = []
         conversation_turns = 0
+        tool_calls_raw: Dict[str, Dict[str, Any]] = {}  # Track tool calls with params
+        model_used: Optional[str] = None  # Track model from AssistantMessage
+        user_prompt = request.message  # Capture user prompt
 
         # Iterate through messages
         # IMPORTANT: Never use `break` - causes asyncio cleanup issues per SDK docs
@@ -361,14 +538,28 @@ async def chat(request: ChatRequest):
             if isinstance(message, AssistantMessage):
                 conversation_turns += 1
 
-                # Extract text content from assistant messages
+                # Capture model from first AssistantMessage
+                if model_used is None:
+                    model_used = message.model
+
+                # Extract text content and track tool usage
                 for block in message.content:
                     if isinstance(block, TextBlock):
                         response_text_parts.append(block.text)
+                    elif isinstance(block, ToolUseBlock):
+                        # Create unique key from tool name + sorted params
+                        key = json.dumps({"name": block.name, "input": block.input}, sort_keys=True)
+                        if key in tool_calls_raw:
+                            tool_calls_raw[key]["count"] += 1
+                        else:
+                            tool_calls_raw[key] = {"name": block.name, "input": block.input, "count": 1}
 
             # Track result message (don't break - let iteration complete)
             if isinstance(message, ResultMessage):
                 result_message = message
+
+        # Convert tool calls to list
+        tool_calls = list(tool_calls_raw.values())
 
         # Process result with explicit error handling
         if result_message:
@@ -377,7 +568,8 @@ async def chat(request: ChatRequest):
                     session_id=session_id,
                     status="success",
                     response_text="\n".join(response_text_parts),
-                    conversation_turns=conversation_turns
+                    conversation_turns=conversation_turns,
+                    metadata=_build_metadata(model_used, tool_calls, result_message, user_prompt=user_prompt)
                 )
             elif result_message.subtype == "error_during_execution":
                 return ChatResponse(
@@ -385,7 +577,8 @@ async def chat(request: ChatRequest):
                     status="error_during_execution",
                     error="Agent encountered an error during execution",
                     response_text="\n".join(response_text_parts),
-                    conversation_turns=conversation_turns
+                    conversation_turns=conversation_turns,
+                    metadata=_build_metadata(model_used, tool_calls, result_message, user_prompt=user_prompt)
                 )
             else:
                 # Generic fallback for any non-success subtype
@@ -395,7 +588,8 @@ async def chat(request: ChatRequest):
                     status=result_message.subtype or "error_unknown",
                     error=error_msg,
                     response_text="\n".join(response_text_parts),
-                    conversation_turns=conversation_turns
+                    conversation_turns=conversation_turns,
+                    metadata=_build_metadata(model_used, tool_calls, result_message, user_prompt=user_prompt)
                 )
 
         # No result received (shouldn't happen)
@@ -410,7 +604,8 @@ async def chat(request: ChatRequest):
             session_id=session_id,
             status="cancelled",
             error="Request cancelled",
-            conversation_turns=0
+            conversation_turns=0,
+            metadata=ResponseMetadata(tool_calls=[])  # No metadata available for cancelled requests
         )
 
     except Exception as e:
@@ -495,6 +690,130 @@ async def list_sessions():
         active_sessions=len(sessions_info),
         sessions=sessions_info
     )
+
+
+@app.post("/analyze", response_model=AnalyzeResponse)
+async def analyze_stock(request: AnalyzeRequest):
+    """
+    Analyze a stock for swing trading opportunities.
+
+    Returns a structured trading recommendation with entry price,
+    stop loss, take profit, and professional reasoning.
+
+    This is a stateless endpoint - each request creates a temporary
+    session that is automatically cleaned up after the response.
+    """
+    client = None
+
+    try:
+        # Create SDK options with stock tools and structured output
+        options = ClaudeAgentOptions(
+            model=DEFAULT_MODEL,
+            permission_mode="bypassPermissions",  # Tools are safe, no user interaction
+            max_turns=5,  # Limit turns for focused analysis
+            mcp_servers={"stock_analysis": stock_tools_server},
+            allowed_tools=["mcp__stock_analysis__get_stock_data"],
+            system_prompt=SWING_TRADING_SYSTEM_PROMPT,
+            output_format={
+                "type": "json_schema",
+                "schema": TRADING_RECOMMENDATION_SCHEMA
+            }
+        )
+
+        # Create temporary client
+        client = ClaudeSDKClient(options=options)
+        await client.connect()
+
+        # Send analysis request
+        user_prompt = f"Analyze {request.stock.upper()} for a potential swing trade opportunity."
+        await client.query(prompt=user_prompt)
+
+        # Collect response and metadata
+        result_message = None
+        tool_calls_raw: Dict[str, Dict[str, Any]] = {}  # Track tool calls with params
+        model_used: Optional[str] = None  # Track model from AssistantMessage
+
+        async for message in client.receive_response():
+            # Collect metadata from assistant messages
+            if isinstance(message, AssistantMessage):
+                # Capture model from first AssistantMessage
+                if model_used is None:
+                    model_used = message.model
+
+                # Track tool usage with params
+                for block in message.content:
+                    if isinstance(block, ToolUseBlock):
+                        key = json.dumps({"name": block.name, "input": block.input}, sort_keys=True)
+                        if key in tool_calls_raw:
+                            tool_calls_raw[key]["count"] += 1
+                        else:
+                            tool_calls_raw[key] = {"name": block.name, "input": block.input, "count": 1}
+
+            if isinstance(message, ResultMessage):
+                result_message = message
+
+        # Convert tool calls to list
+        tool_calls = list(tool_calls_raw.values())
+
+        # Process result
+        if result_message:
+            metadata = _build_metadata(
+                model_used, tool_calls, result_message,
+                system_prompt=SWING_TRADING_SYSTEM_PROMPT,
+                user_prompt=user_prompt
+            )
+
+            if result_message.subtype == "success" and hasattr(result_message, 'structured_output'):
+                output = result_message.structured_output
+                return AnalyzeResponse(**output, metadata=metadata)
+
+            elif result_message.subtype == "error_max_structured_output_retries":
+                # Agent couldn't produce valid structured output
+                return AnalyzeResponse(
+                    stock=request.stock.upper(),
+                    recommendation="Not Buy",
+                    entry_price=0,
+                    stop_loss=0,
+                    take_profit=0,
+                    reasoning="Unable to complete analysis - agent could not produce valid structured output after multiple attempts.",
+                    missing_tools=["Stable analysis pipeline"],
+                    confidence_score=0,
+                    metadata=metadata
+                )
+            else:
+                # Other error
+                return AnalyzeResponse(
+                    stock=request.stock.upper(),
+                    recommendation="Not Buy",
+                    entry_price=0,
+                    stop_loss=0,
+                    take_profit=0,
+                    reasoning=f"Analysis failed with status: {result_message.subtype}",
+                    missing_tools=[],
+                    confidence_score=0,
+                    metadata=metadata
+                )
+
+        # No result received
+        raise HTTPException(
+            status_code=500,
+            detail="No result received from analysis agent"
+        )
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Analysis error: {str(e)}"
+        )
+    finally:
+        # Always cleanup the temporary session
+        if client:
+            try:
+                await client.disconnect()
+            except Exception:
+                pass  # Ignore disconnect errors
 
 
 if __name__ == "__main__":
