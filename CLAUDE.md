@@ -141,3 +141,17 @@ return YourResponse(..., metadata=metadata)
   }
 }
 ```
+
+## External API: Trading Analyst API
+
+The stock tools (`stock_tools.py`) connect to an external **Trading Analyst API** running on `http://localhost:8093`.
+
+### Stock Analysis Endpoint
+
+**`GET /api/v1/stocks/analysis/{symbol}`** - Complete technical analysis
+
+**Parameters**:
+- `period`: Time period - `1mo`, `3mo`, `6mo`, `1y` (default: `3mo`)
+- `interval`: Data interval - `1d`, `1wk` (default: `1d`)
+
+**Returns**: Moving averages, momentum (RSI, MACD, Stochastic, CCI), volatility (ATR, Bollinger Bands), trend (ADX), support/resistance levels, volume statistics
