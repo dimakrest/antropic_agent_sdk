@@ -5,44 +5,24 @@ MCP tool functions for fetching stock data from the Technical Analysis API
 and calculating position sizes.
 """
 
-import os
-from typing import Any
-
+import json
 import httpx
-from dotenv import load_dotenv
-
-load_dotenv()
-
-TECHNICAL_ANALYSIS_API_URL = os.getenv(
-    "TECHNICAL_ANALYSIS_API_URL", "http://localhost:8093"
-)
+from claude_agent_sdk import tool, create_sdk_mcp_server
 
 
-async def get_stock_data(
-    symbol: str,
-    period: str = "3mo",
-    interval: str = "1d"
-) -> dict[str, Any]:
+async def _get_stock_data_impl(args: dict) -> dict:
     """
+    Internal implementation of get_stock_data.
+
     Fetch stock data with technical analysis from API.
-
-    Args:
-        symbol: Stock ticker (e.g., "AAPL")
-        period: Time period - "1mo", "3mo", "6mo", "1y" (default: "3mo")
-        interval: Data interval - "1d", "1wk" (default: "1d")
-
-    Returns:
-        dict: Technical analysis data including price, volume, moving averages,
-              momentum indicators, volatility metrics, trend indicators,
-              support/resistance levels, and recent candles.
-              Returns {"error": "..."} on failure.
+    Returns MCP-formatted content response.
     """
-    if not symbol or not isinstance(symbol, str):
-        return {"error": "Symbol must be a non-empty string"}
+    symbol = args["symbol"]
+    period = args.get("period", "3mo")
+    interval = args.get("interval", "1d")
 
-    symbol = symbol.upper().strip()
-
-    url = f"{TECHNICAL_ANALYSIS_API_URL}/api/v1/stocks/{symbol}/analysis"
+    # Correct endpoint format: /api/v1/stocks/analysis/{symbol}
+    url = f"http://localhost:8093/api/v1/stocks/analysis/{symbol}"
 
     try:
         async with httpx.AsyncClient() as client:
@@ -52,13 +32,84 @@ async def get_stock_data(
             )
 
             if response.status_code == 404:
-                return {"error": f"Symbol not found: {symbol}"}
+                return {
+                    "content": [{
+                        "type": "text",
+                        "text": f"Error: Symbol not found: {symbol}"
+                    }]
+                }
             if response.status_code != 200:
-                return {"error": f"API error: {response.status_code}"}
+                return {
+                    "content": [{
+                        "type": "text",
+                        "text": f"Error: API error: {response.status_code}"
+                    }]
+                }
 
-            return response.json()
+            data = response.json()
+            # Format as readable text for the agent
+            return {
+                "content": [{
+                    "type": "text",
+                    "text": json.dumps(data, indent=2)
+                }]
+            }
     except httpx.ConnectError:
-        return {"error": f"Technical Analysis API unavailable at {TECHNICAL_ANALYSIS_API_URL}"}
+        return {
+            "content": [{
+                "type": "text",
+                "text": "Error: Technical Analysis API unavailable at localhost:8093"
+            }]
+        }
+
+
+# MCP Tool wrapper for the get_stock_data function
+get_stock_data_tool = tool(
+    name="get_stock_data",
+    description="Fetch comprehensive technical analysis data for a stock including price, volume, moving averages, momentum indicators (RSI, MACD), volatility (ATR, Bollinger Bands), trend indicators (ADX), and support/resistance levels.",
+    input_schema={
+        "type": "object",
+        "properties": {
+            "symbol": {
+                "type": "string",
+                "description": "Stock ticker symbol (e.g., 'AAPL', 'MSFT', 'NVDA')"
+            },
+            "period": {
+                "type": "string",
+                "description": "Time period for analysis",
+                "enum": ["1mo", "3mo", "6mo", "1y"],
+                "default": "3mo"
+            },
+            "interval": {
+                "type": "string",
+                "description": "Data interval",
+                "enum": ["1d", "1wk"],
+                "default": "1d"
+            }
+        },
+        "required": ["symbol"]
+    }
+)(_get_stock_data_impl)
+
+
+# Export the raw async function for testing and direct usage
+async def get_stock_data(args: dict) -> dict:
+    """
+    Fetch stock data with technical analysis from API.
+
+    This is a thin wrapper around _get_stock_data_impl for backwards
+    compatibility and testing purposes.
+
+    Args:
+        args: Dictionary containing:
+            - symbol: Stock ticker symbol (required)
+            - period: Time period "1mo", "3mo", "6mo", "1y" (default: "3mo")
+            - interval: Data interval "1d", "1wk" (default: "1d")
+
+    Returns:
+        MCP-formatted content response with technical analysis data.
+    """
+    return await _get_stock_data_impl(args)
 
 
 def calculate_position_size(
@@ -66,7 +117,7 @@ def calculate_position_size(
     risk_percent: float,
     entry_price: float,
     stop_loss_price: float
-) -> dict[str, Any]:
+) -> dict:
     """
     Calculate position size based on account risk parameters.
 
@@ -120,3 +171,11 @@ def calculate_position_size(
             "percent_of_account": round(percent_of_account, 2)
         }
     }
+
+
+# Create MCP server with stock tools
+stock_tools_server = create_sdk_mcp_server(
+    name="stock_analysis",
+    version="1.0.0",
+    tools=[get_stock_data_tool]
+)
