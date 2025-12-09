@@ -146,9 +146,21 @@ class AnalyzeRequest(BaseModel):
     )
 
 
+class DataParameterJustification(BaseModel):
+    """Justification for data parameter choices"""
+    period: str = Field(..., description="Period chosen (e.g., '3mo', '1mo')")
+    period_reasoning: str = Field(..., description="Why this period was selected")
+    interval: str = Field(..., description="Interval chosen (e.g., '1d', '15m')")
+    interval_reasoning: str = Field(..., description="Why this interval was selected")
+
+
 class AnalyzeResponse(BaseModel):
     """Response model for swing trading analysis"""
     stock: str = Field(..., description="The input ticker symbol")
+    data_parameters: DataParameterJustification = Field(
+        ...,
+        description="Justification for the period and interval choices"
+    )
     recommendation: str = Field(
         ...,
         description="Trading recommendation: 'Buy' or 'Not Buy'"
@@ -181,6 +193,17 @@ TRADING_RECOMMENDATION_SCHEMA = {
     "type": "object",
     "properties": {
         "stock": {"type": "string"},
+        "data_parameters": {
+            "type": "object",
+            "properties": {
+                "period": {"type": "string", "description": "Period chosen (e.g., '3mo', '1mo')"},
+                "period_reasoning": {"type": "string", "description": "Why this period was selected"},
+                "interval": {"type": "string", "description": "Interval chosen (e.g., '1d', '15m')"},
+                "interval_reasoning": {"type": "string", "description": "Why this interval was selected"}
+            },
+            "required": ["period", "period_reasoning", "interval", "interval_reasoning"],
+            "additionalProperties": False
+        },
         "recommendation": {
             "type": "string",
             "enum": ["Buy", "Not Buy"]
@@ -201,6 +224,7 @@ TRADING_RECOMMENDATION_SCHEMA = {
     },
     "required": [
         "stock",
+        "data_parameters",
         "recommendation",
         "entry_price",
         "stop_loss",
@@ -220,9 +244,17 @@ You ARE the trading expert. Apply your own trading expertise and judgment to ana
 
 ## Analysis Process
 1. ALWAYS use the get_stock_data tool to fetch current technical analysis data
-2. Analyze the data using your trading expertise
-3. Make a binary decision: Buy or Not Buy (no "Hold" or "Maybe")
-4. Provide specific price levels for entry, stop loss, and take profit
+2. You MUST deliberately choose appropriate parameter values based on your trading analysis:
+   - period: Select based on the analysis needs (1mo, 3mo, 6mo, or 1y)
+   - interval: Select based on what data you need (15m for intraday levels, 1d for daily trends, 1wk for weekly patterns)
+3. Analyze the data using your trading expertise
+4. Make a binary decision: Buy or Not Buy (no "Hold" or "Maybe")
+5. Provide specific price levels for entry, stop loss, and take profit
+
+## CRITICAL: Data Parameter Requirements
+You MUST provide justification for your parameter choices in the data_parameters field:
+- period: The period you chose AND why (e.g., "3mo" because "3 months provides enough history for SMA-50/200 calculations and captures recent trend behavior")
+- interval: The interval you chose AND why (e.g., "15m" because "intraday data reveals precise support/resistance levels for entry timing" OR "1d" because "daily candles are standard for swing trade pattern recognition")
 
 ## Decision Framework
 - Focus on swing trade setups with 3-5 day holding period
@@ -231,14 +263,19 @@ You ARE the trading expert. Apply your own trading expertise and judgment to ana
 - Consider trend direction, momentum, and key support/resistance levels
 
 ## Key Indicators to Consider
-- RSI: Look for momentum confirmation (not overbought >70 or oversold <30 for entries)
-- MACD: Trend direction and potential crossovers
-- Moving Averages: Price relative to 20, 50, 200 SMA for trend context
-- Support/Resistance: Key levels for entry and stop placement
-- Volume: Confirmation of price moves
-- ATR: For appropriate stop loss and target distance
+- RSI (14/7): Momentum confirmation - avoid entries when overbought >70 or oversold <30
+- MACD: Trend direction, crossovers, histogram for momentum strength
+- Stochastic (K/D): Overbought/oversold timing signals
+- CCI: Check the "signal" field for reversal signals (reversal_buy, reversal_sell)
+- Moving Averages: Price vs SMA 20/50/200 and EMA 12/26 for trend context
+- Support/Resistance: 3 levels each plus pivot point for entry and stop placement
+- Volume: Compare current to 20-day average (ratio_vs_avg_20 field)
+- ATR (14/7): For appropriate stop loss distance
+- Bollinger Bands: Volatility context, squeeze/breakout setups
+- ADX: Trend strength - values >25 indicate strong trend
 
 ## Output Requirements
+- data_parameters: Object with period, period_reasoning, interval, interval_reasoning - explain your parameter choices
 - recommendation: "Buy" or "Not Buy" - binary decision only
 - entry_price: Specific price (can be current price for immediate entry or limit near support)
 - stop_loss: Below recent support or based on ATR
