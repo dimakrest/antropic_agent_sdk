@@ -1,0 +1,22 @@
+{
+  "permissions": {
+    "allow": [
+      "WebSearch",
+      "WebFetch(domain:finnhub.io)",
+      "WebFetch(domain:www.alphavantage.co)",
+      "WebFetch(domain:twelvedata.com)",
+      "WebFetch(domain:www.luxalgo.com)",
+      "WebFetch(domain:www.quantshare.com)",
+      "WebFetch(domain:eodhd.medium.com)",
+      "Bash(git -C /Users/dima/development/claude_agent_sdk log --oneline --all -20)",
+      "Bash(git -C /Users/dima/development/claude_agent_sdk branch:*)",
+      "Bash(git -C /Users/dima/development/claude_agent_sdk log --oneline feature/stock-prices-custom-tool -10)",
+      "Bash(git -C /Users/dima/development/claude_agent_sdk diff main feature/stock-prices-custom-tool --name-status)",
+      "Bash(git -C /Users/dima/development/claude_agent_sdk status)",
+      "Bash(uv run python:*)",
+      "WebFetch(domain:localhost)"
+    ],
+    "deny": [],
+    "ask": []
+  }
+}

@@ -578,7 +578,13 @@ def mock_sdk_client_for_analyze():
             "take_profit": 110.0,
             "reasoning": "Test analysis",
             "missing_tools": [],
-            "confidence_score": 75
+            "confidence_score": 75,
+            "data_parameters": {
+                "period": "3mo",
+                "period_reasoning": "3 months provides sufficient history for swing trading analysis",
+                "interval": "1d",
+                "interval_reasoning": "Daily data is appropriate for swing trading timeframes"
+            }
         }
         yield result_msg
 
