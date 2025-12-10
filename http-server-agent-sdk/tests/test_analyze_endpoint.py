@@ -335,3 +335,151 @@ class TestAnalyzeEndpoint:
         assert isinstance(data["reasoning"], str)
         assert isinstance(data["missing_tools"], list)
         assert isinstance(data["confidence_score"], int)
+
+    # =========================================================================
+    # analysis_date Parameter Tests (Phase 3 from implementation plan)
+    # =========================================================================
+
+    def test_analyze_with_analysis_date(self, mock_successful_analysis):
+        """Test /analyze with analysis_date parameter calls factory with date"""
+        mock_client = AsyncMock()
+        mock_client.connect = AsyncMock()
+        mock_client.disconnect = AsyncMock()
+        mock_client.query = AsyncMock()
+
+        async def mock_receive_response():
+            yield create_result_message(
+                subtype="success",
+                structured_output=mock_successful_analysis
+            )
+
+        mock_client.receive_response = mock_receive_response
+
+        with patch('server.ClaudeSDKClient', return_value=mock_client):
+            with patch('server.create_stock_tools_server') as mock_factory:
+                mock_factory.return_value = MagicMock()
+
+                response = self.client.post(
+                    "/analyze",
+                    json={"stock": "AAPL", "analysis_date": "2024-06-15"}
+                )
+
+                assert response.status_code == 200
+                # Verify factory was called with the date
+                mock_factory.assert_called_once_with(analysis_date="2024-06-15")
+
+    def test_analyze_without_analysis_date(self, mock_successful_analysis):
+        """Test /analyze without analysis_date calls factory with None"""
+        mock_client = AsyncMock()
+        mock_client.connect = AsyncMock()
+        mock_client.disconnect = AsyncMock()
+        mock_client.query = AsyncMock()
+
+        async def mock_receive_response():
+            yield create_result_message(
+                subtype="success",
+                structured_output=mock_successful_analysis
+            )
+
+        mock_client.receive_response = mock_receive_response
+
+        with patch('server.ClaudeSDKClient', return_value=mock_client):
+            with patch('server.create_stock_tools_server') as mock_factory:
+                mock_factory.return_value = MagicMock()
+
+                response = self.client.post(
+                    "/analyze",
+                    json={"stock": "AAPL"}
+                )
+
+                assert response.status_code == 200
+                # Verify factory was called with None (no date)
+                mock_factory.assert_called_once_with(analysis_date=None)
+
+    def test_analyze_invalid_date_format_slash(self):
+        """Test /analyze rejects date with slashes instead of dashes"""
+        response = self.client.post(
+            "/analyze",
+            json={"stock": "AAPL", "analysis_date": "2024/06/15"}
+        )
+        assert response.status_code == 422  # Validation error
+
+    def test_analyze_invalid_date_format_no_dashes(self):
+        """Test /analyze rejects date without dashes"""
+        response = self.client.post(
+            "/analyze",
+            json={"stock": "AAPL", "analysis_date": "20240615"}
+        )
+        assert response.status_code == 422  # Validation error
+
+    def test_analyze_invalid_date_format_partial(self):
+        """Test /analyze rejects partial date format"""
+        response = self.client.post(
+            "/analyze",
+            json={"stock": "AAPL", "analysis_date": "2024-06"}
+        )
+        assert response.status_code == 422  # Validation error
+
+    def test_analyze_valid_date_formats(self, mock_successful_analysis):
+        """Test /analyze accepts various valid YYYY-MM-DD formats"""
+        mock_client = AsyncMock()
+        mock_client.connect = AsyncMock()
+        mock_client.disconnect = AsyncMock()
+        mock_client.query = AsyncMock()
+
+        async def mock_receive_response():
+            yield create_result_message(
+                subtype="success",
+                structured_output=mock_successful_analysis
+            )
+
+        mock_client.receive_response = mock_receive_response
+
+        valid_dates = ["2024-01-01", "2023-12-31", "2020-06-15"]
+
+        for date in valid_dates:
+            with patch('server.ClaudeSDKClient', return_value=mock_client):
+                with patch('server.create_stock_tools_server') as mock_factory:
+                    mock_factory.return_value = MagicMock()
+
+                    response = self.client.post(
+                        "/analyze",
+                        json={"stock": "AAPL", "analysis_date": date}
+                    )
+
+                    assert response.status_code == 200, f"Failed for date: {date}"
+
+
+class TestCreateStockToolsServer:
+    """Tests for create_stock_tools_server factory function"""
+
+    def test_create_stock_tools_server_with_date(self):
+        """Test factory function creates server with analysis_date"""
+        from stock_tools import create_stock_tools_server
+
+        server_config = create_stock_tools_server(analysis_date="2024-06-15")
+
+        assert server_config is not None
+        assert isinstance(server_config, dict)
+        assert server_config["name"] == "stock_analysis"
+        assert server_config["type"] == "sdk"
+
+    def test_create_stock_tools_server_without_date(self):
+        """Test factory function creates server without date (default behavior)"""
+        from stock_tools import create_stock_tools_server
+
+        server_config = create_stock_tools_server()
+
+        assert server_config is not None
+        assert isinstance(server_config, dict)
+        assert server_config["name"] == "stock_analysis"
+
+    def test_create_stock_tools_server_with_none_date(self):
+        """Test factory function handles explicit None date"""
+        from stock_tools import create_stock_tools_server
+
+        server_config = create_stock_tools_server(analysis_date=None)
+
+        assert server_config is not None
+        assert isinstance(server_config, dict)
+        assert server_config["name"] == "stock_analysis"

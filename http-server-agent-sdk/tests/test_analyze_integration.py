@@ -3,8 +3,8 @@ Integration tests for the /analyze swing trading endpoint.
 
 These tests require:
 1. ANTHROPIC_API_KEY environment variable
-2. Technical Analysis API running on localhost:8093
-3. HTTP server running on localhost:8000
+2. Technical Analysis API running on localhost:8131
+3. HTTP server running on localhost:8001
 
 Run with: uv run python tests/test_analyze_integration.py
 """
@@ -21,7 +21,7 @@ async def test_analyze_valid_symbol():
 
     async with httpx.AsyncClient(timeout=60.0) as client:
         response = await client.post(
-            "http://localhost:8000/analyze",
+            "http://localhost:8001/analyze",
             json={"stock": "AAPL"}
         )
 
@@ -52,7 +52,7 @@ async def test_analyze_invalid_symbol():
 
     async with httpx.AsyncClient(timeout=60.0) as client:
         response = await client.post(
-            "http://localhost:8000/analyze",
+            "http://localhost:8001/analyze",
             json={"stock": "INVALIDXYZ"}
         )
 
@@ -73,7 +73,7 @@ async def test_analyze_lowercase_symbol():
 
     async with httpx.AsyncClient(timeout=60.0) as client:
         response = await client.post(
-            "http://localhost:8000/analyze",
+            "http://localhost:8001/analyze",
             json={"stock": "msft"}
         )
 
@@ -103,11 +103,11 @@ async def check_prerequisites():
     try:
         async with httpx.AsyncClient() as client:
             response = await client.get(
-                "http://localhost:8093/api/v1/stocks/analysis/AAPL",
+                "http://localhost:8131/api/v1/stocks/analysis/AAPL",
                 timeout=5.0
             )
         if response.status_code == 200:
-            print("✓ Technical Analysis API is running on localhost:8093")
+            print("✓ Technical Analysis API is running on localhost:8131")
         else:
             print(f"✗ Technical Analysis API returned {response.status_code}")
             return False
@@ -119,11 +119,11 @@ async def check_prerequisites():
     try:
         async with httpx.AsyncClient() as client:
             response = await client.get(
-                "http://localhost:8000/health",
+                "http://localhost:8001/health",
                 timeout=5.0
             )
         if response.status_code == 200:
-            print("✓ HTTP server is running on localhost:8000")
+            print("✓ HTTP server is running on localhost:8001")
         else:
             print(f"✗ HTTP server health check returned {response.status_code}")
             return False

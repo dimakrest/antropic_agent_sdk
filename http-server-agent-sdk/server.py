@@ -569,6 +569,56 @@ def _build_metadata(
     )
 
 
+class MessageProcessingResult:
+    """Result from processing SDK response messages"""
+    def __init__(self):
+        self.result_message: Optional[ResultMessage] = None
+        self.model_used: Optional[str] = None
+        self.tool_calls: List[Dict[str, Any]] = []
+        self.text_parts: List[str] = []
+        self.conversation_turns: int = 0
+
+
+async def process_sdk_response(client: ClaudeSDKClient) -> MessageProcessingResult:
+    """
+    Process SDK response messages and extract metadata.
+
+    Handles the common pattern of iterating through messages,
+    extracting text, tracking tool calls, and capturing metadata.
+
+    Args:
+        client: The SDK client to receive responses from
+
+    Returns:
+        MessageProcessingResult with all extracted data
+    """
+    result = MessageProcessingResult()
+    tool_calls_raw: Dict[str, Dict[str, Any]] = {}
+
+    async for message in client.receive_response():
+        if isinstance(message, AssistantMessage):
+            result.conversation_turns += 1
+
+            if result.model_used is None:
+                result.model_used = message.model
+
+            for block in message.content:
+                if isinstance(block, TextBlock):
+                    result.text_parts.append(block.text)
+                elif isinstance(block, ToolUseBlock):
+                    key = json.dumps({"name": block.name, "input": block.input}, sort_keys=True)
+                    if key in tool_calls_raw:
+                        tool_calls_raw[key]["count"] += 1
+                    else:
+                        tool_calls_raw[key] = {"name": block.name, "input": block.input, "count": 1}
+
+        if isinstance(message, ResultMessage):
+            result.result_message = message
+
+    result.tool_calls = list(tool_calls_raw.values())
+    return result
+
+
 @app.post("/chat", response_model=ChatResponse)
 async def chat(request: ChatRequest):
     """
@@ -593,76 +643,46 @@ async def chat(request: ChatRequest):
 
     try:
         # Send query to SDK
-        await client.query(prompt=request.message)
+        user_prompt = request.message
+        await client.query(prompt=user_prompt)
 
-        # Collect response messages
-        response_text_parts = []
-        conversation_turns = 0
-        tool_calls_raw: Dict[str, Dict[str, Any]] = {}  # Track tool calls with params
-        model_used: Optional[str] = None  # Track model from AssistantMessage
-        user_prompt = request.message  # Capture user prompt
-
-        # Iterate through messages
-        # IMPORTANT: Never use `break` - causes asyncio cleanup issues per SDK docs
-        # Let the iteration complete naturally, use flags to track state
-        result_message = None
-        async for message in client.receive_response():
-            # Count conversation turns for assistant messages
-            if isinstance(message, AssistantMessage):
-                conversation_turns += 1
-
-                # Capture model from first AssistantMessage
-                if model_used is None:
-                    model_used = message.model
-
-                # Extract text content and track tool usage
-                for block in message.content:
-                    if isinstance(block, TextBlock):
-                        response_text_parts.append(block.text)
-                    elif isinstance(block, ToolUseBlock):
-                        # Create unique key from tool name + sorted params
-                        key = json.dumps({"name": block.name, "input": block.input}, sort_keys=True)
-                        if key in tool_calls_raw:
-                            tool_calls_raw[key]["count"] += 1
-                        else:
-                            tool_calls_raw[key] = {"name": block.name, "input": block.input, "count": 1}
-
-            # Track result message (don't break - let iteration complete)
-            if isinstance(message, ResultMessage):
-                result_message = message
-
-        # Convert tool calls to list
-        tool_calls = list(tool_calls_raw.values())
+        # Process response using shared helper
+        proc = await process_sdk_response(client)
 
         # Process result with explicit error handling
-        if result_message:
-            if result_message.subtype == "success":
+        if proc.result_message:
+            metadata = _build_metadata(
+                proc.model_used, proc.tool_calls, proc.result_message, user_prompt=user_prompt
+            )
+            response_text = "\n".join(proc.text_parts)
+
+            if proc.result_message.subtype == "success":
                 return ChatResponse(
                     session_id=session_id,
                     status="success",
-                    response_text="\n".join(response_text_parts),
-                    conversation_turns=conversation_turns,
-                    metadata=_build_metadata(model_used, tool_calls, result_message, user_prompt=user_prompt)
+                    response_text=response_text,
+                    conversation_turns=proc.conversation_turns,
+                    metadata=metadata
                 )
-            elif result_message.subtype == "error_during_execution":
+            elif proc.result_message.subtype == "error_during_execution":
                 return ChatResponse(
                     session_id=session_id,
                     status="error_during_execution",
                     error="Agent encountered an error during execution",
-                    response_text="\n".join(response_text_parts),
-                    conversation_turns=conversation_turns,
-                    metadata=_build_metadata(model_used, tool_calls, result_message, user_prompt=user_prompt)
+                    response_text=response_text,
+                    conversation_turns=proc.conversation_turns,
+                    metadata=metadata
                 )
             else:
                 # Generic fallback for any non-success subtype
-                error_msg = f"Agent returned non-success result: {result_message.subtype}"
+                error_msg = f"Agent returned non-success result: {proc.result_message.subtype}"
                 return ChatResponse(
                     session_id=session_id,
-                    status=result_message.subtype or "error_unknown",
+                    status=proc.result_message.subtype or "error_unknown",
                     error=error_msg,
-                    response_text="\n".join(response_text_parts),
-                    conversation_turns=conversation_turns,
-                    metadata=_build_metadata(model_used, tool_calls, result_message, user_prompt=user_prompt)
+                    response_text=response_text,
+                    conversation_turns=proc.conversation_turns,
+                    metadata=metadata
                 )
 
         # No result received (shouldn't happen)
@@ -826,46 +846,22 @@ async def analyze_stock(request: AnalyzeRequest):
         user_prompt = f"Analyze {request.stock.upper()} for a potential swing trade opportunity."
         await client.query(prompt=user_prompt)
 
-        # Collect response and metadata
-        result_message = None
-        tool_calls_raw: Dict[str, Dict[str, Any]] = {}  # Track tool calls with params
-        model_used: Optional[str] = None  # Track model from AssistantMessage
-
-        async for message in client.receive_response():
-            # Collect metadata from assistant messages
-            if isinstance(message, AssistantMessage):
-                # Capture model from first AssistantMessage
-                if model_used is None:
-                    model_used = message.model
-
-                # Track tool usage with params
-                for block in message.content:
-                    if isinstance(block, ToolUseBlock):
-                        key = json.dumps({"name": block.name, "input": block.input}, sort_keys=True)
-                        if key in tool_calls_raw:
-                            tool_calls_raw[key]["count"] += 1
-                        else:
-                            tool_calls_raw[key] = {"name": block.name, "input": block.input, "count": 1}
-
-            if isinstance(message, ResultMessage):
-                result_message = message
-
-        # Convert tool calls to list
-        tool_calls = list(tool_calls_raw.values())
+        # Process response using shared helper
+        proc = await process_sdk_response(client)
 
         # Process result
-        if result_message:
+        if proc.result_message:
             metadata = _build_metadata(
-                model_used, tool_calls, result_message,
+                proc.model_used, proc.tool_calls, proc.result_message,
                 system_prompt=SWING_TRADING_SYSTEM_PROMPT,
                 user_prompt=user_prompt
             )
 
-            if result_message.subtype == "success" and hasattr(result_message, 'structured_output'):
-                output = result_message.structured_output
+            if proc.result_message.subtype == "success" and hasattr(proc.result_message, 'structured_output'):
+                output = proc.result_message.structured_output
                 return AnalyzeResponse(**output, metadata=metadata)
 
-            elif result_message.subtype == "error_max_structured_output_retries":
+            elif proc.result_message.subtype == "error_max_structured_output_retries":
                 # Agent couldn't produce valid structured output
                 return AnalyzeResponse(
                     stock=request.stock.upper(),
@@ -886,7 +882,7 @@ async def analyze_stock(request: AnalyzeRequest):
                     entry_price=0,
                     stop_loss=0,
                     take_profit=0,
-                    reasoning=f"Analysis failed with status: {result_message.subtype}",
+                    reasoning=f"Analysis failed with status: {proc.result_message.subtype}",
                     missing_tools=[],
                     confidence_score=0,
                     metadata=metadata
@@ -927,5 +923,5 @@ async def analyze_stock(request: AnalyzeRequest):
 if __name__ == "__main__":
     import uvicorn
     host = os.getenv("HOST", "0.0.0.0")
-    port = int(os.getenv("PORT", "8000"))
+    port = int(os.getenv("PORT", "8001"))  # Default to 8001 (8000 used by Docker on macOS)
     uvicorn.run(app, host=host, port=port)

@@ -12,11 +12,11 @@ Instructions for Claude Code when working in this project.
 ### Common Commands
 
 ```bash
-# Run the server
-uv run python server.py
+# Run the server (ALWAYS use port 8001)
+uv run uvicorn server:app --port 8001
 
-# Run with uvicorn (with reload)
-uv run uvicorn server:app --reload
+# Run with reload (development)
+uv run uvicorn server:app --port 8001 --reload
 
 # Run tests
 uv run pytest tests/test_server.py -v
@@ -24,8 +24,8 @@ uv run pytest tests/test_server.py -v
 # Run tests with coverage
 uv run pytest tests/test_server.py --cov=server --cov-report=term
 
-# Run integration tests
-uv run python tests/integration_test.py
+# Run integration tests (requires server on port 8001 + Trading API on port 8131)
+uv run python tests/test_analyze_integration.py
 
 # Install/sync dependencies
 uv sync
@@ -36,6 +36,12 @@ uv add <package-name>
 # Add a dev dependency
 uv add --dev <package-name>
 ```
+
+## Server Port
+
+**CRITICAL**: This server MUST run on **port 8001** (not 8000).
+
+Port 8000 is typically used by Docker on macOS. Always start the server with `--port 8001`.
 
 ## Project Structure
 
