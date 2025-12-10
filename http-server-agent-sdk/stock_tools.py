@@ -15,6 +15,72 @@ from claude_agent_sdk import tool, create_sdk_mcp_server
 TRADING_API_BASE_URL = os.environ.get("TRADING_API_BASE_URL")
 
 
+async def _fetch_stock_data(
+    symbol: str,
+    period: str = "3mo",
+    interval: str = "1d",
+    analysis_date: Optional[str] = None
+) -> dict:
+    """
+    Core implementation for fetching stock data with technical analysis.
+
+    Args:
+        symbol: Stock ticker symbol (e.g., 'AAPL', 'MSFT')
+        period: Time period for analysis ("1mo", "3mo", "6mo", "1y")
+        interval: Data interval ("1d", "1wk")
+        analysis_date: Optional date string (YYYY-MM-DD) for historical analysis
+
+    Returns:
+        MCP-formatted content response with technical analysis data.
+    """
+    if not TRADING_API_BASE_URL:
+        return {
+            "content": [{
+                "type": "text",
+                "text": "Error: TRADING_API_BASE_URL environment variable not set"
+            }]
+        }
+
+    url = f"{TRADING_API_BASE_URL}/stocks/analysis/{symbol}"
+    params = {"period": period, "interval": interval}
+    if analysis_date:
+        params["analysis_date"] = analysis_date
+
+    try:
+        async with httpx.AsyncClient() as client:
+            response = await client.get(url, params=params)
+
+            if response.status_code == 404:
+                return {
+                    "content": [{
+                        "type": "text",
+                        "text": f"Error: Symbol not found: {symbol}"
+                    }]
+                }
+            if response.status_code != 200:
+                return {
+                    "content": [{
+                        "type": "text",
+                        "text": f"Error: API error: {response.status_code}"
+                    }]
+                }
+
+            data = response.json()
+            return {
+                "content": [{
+                    "type": "text",
+                    "text": json.dumps(data, indent=2)
+                }]
+            }
+    except httpx.ConnectError:
+        return {
+            "content": [{
+                "type": "text",
+                "text": f"Error: Technical Analysis API unavailable at {TRADING_API_BASE_URL}"
+            }]
+        }
+
+
 def create_stock_tools_server(analysis_date: Optional[str] = None):
     """
     Factory function to create MCP server with bound analysis_date.
@@ -28,68 +94,14 @@ def create_stock_tools_server(analysis_date: Optional[str] = None):
     """
 
     async def _get_stock_data_impl(args: dict) -> dict:
-        """
-        Internal implementation of get_stock_data.
+        """Tool implementation that delegates to shared fetch function."""
+        return await _fetch_stock_data(
+            symbol=args["symbol"],
+            period=args.get("period", "3mo"),
+            interval=args.get("interval", "1d"),
+            analysis_date=analysis_date  # Captured from closure
+        )
 
-        Fetch stock data with technical analysis from API.
-        Returns MCP-formatted content response.
-
-        Note: analysis_date is captured from outer scope (closure).
-        """
-        symbol = args["symbol"]
-        period = args.get("period", "3mo")
-        interval = args.get("interval", "1d")
-
-        if not TRADING_API_BASE_URL:
-            return {
-                "content": [{
-                    "type": "text",
-                    "text": "Error: TRADING_API_BASE_URL environment variable not set"
-                }]
-            }
-
-        url = f"{TRADING_API_BASE_URL}/stocks/analysis/{symbol}"
-
-        # Build params - inject analysis_date from closure if provided
-        params = {"period": period, "interval": interval}
-        if analysis_date:
-            params["analysis_date"] = analysis_date
-
-        try:
-            async with httpx.AsyncClient() as client:
-                response = await client.get(url, params=params)
-
-                if response.status_code == 404:
-                    return {
-                        "content": [{
-                            "type": "text",
-                            "text": f"Error: Symbol not found: {symbol}"
-                        }]
-                    }
-                if response.status_code != 200:
-                    return {
-                        "content": [{
-                            "type": "text",
-                            "text": f"Error: API error: {response.status_code}"
-                        }]
-                    }
-
-                data = response.json()
-                return {
-                    "content": [{
-                        "type": "text",
-                        "text": json.dumps(data, indent=2)
-                    }]
-                }
-        except httpx.ConnectError:
-            return {
-                "content": [{
-                    "type": "text",
-                    "text": f"Error: Technical Analysis API unavailable at {TRADING_API_BASE_URL}"
-                }]
-            }
-
-    # Create tool with closure-bound implementation
     get_stock_data_tool = tool(
         name="get_stock_data",
         description="Fetch comprehensive technical analysis data for a stock including price, volume, moving averages, momentum indicators (RSI, MACD), volatility (ATR, Bollinger Bands), trend indicators (ADX), and support/resistance levels.",
@@ -122,80 +134,6 @@ def create_stock_tools_server(analysis_date: Optional[str] = None):
         version="1.0.0",
         tools=[get_stock_data_tool]
     )
-
-
-# Default server for backwards compatibility (no date binding)
-stock_tools_server = create_stock_tools_server()
-
-
-# Export the raw async function for testing and direct usage
-# Note: This does NOT support analysis_date - use create_stock_tools_server() for that
-async def get_stock_data(args: dict) -> dict:
-    """
-    Fetch stock data with technical analysis from API.
-
-    This is a thin wrapper for backwards compatibility and testing purposes.
-    NOTE: Does not support analysis_date parameter - use create_stock_tools_server() for that.
-
-    Args:
-        args: Dictionary containing:
-            - symbol: Stock ticker symbol (required)
-            - period: Time period "1mo", "3mo", "6mo", "1y" (default: "3mo")
-            - interval: Data interval "1d", "1wk" (default: "1d")
-
-    Returns:
-        MCP-formatted content response with technical analysis data.
-    """
-    symbol = args["symbol"]
-    period = args.get("period", "3mo")
-    interval = args.get("interval", "1d")
-
-    if not TRADING_API_BASE_URL:
-        return {
-            "content": [{
-                "type": "text",
-                "text": "Error: TRADING_API_BASE_URL environment variable not set"
-            }]
-        }
-
-    url = f"{TRADING_API_BASE_URL}/stocks/analysis/{symbol}"
-
-    try:
-        async with httpx.AsyncClient() as client:
-            response = await client.get(
-                url,
-                params={"period": period, "interval": interval}
-            )
-
-            if response.status_code == 404:
-                return {
-                    "content": [{
-                        "type": "text",
-                        "text": f"Error: Symbol not found: {symbol}"
-                    }]
-                }
-            if response.status_code != 200:
-                return {
-                    "content": [{
-                        "type": "text",
-                        "text": f"Error: API error: {response.status_code}"
-                    }]
-                }
-
-            data = response.json()
-            return {
-                "content": [{
-                    "type": "text",
-                    "text": json.dumps(data, indent=2)
-                }]
-            }
-    except httpx.ConnectError:
-        return {
-            "content": [{
-                "type": "text",
-                "text": f"Error: Technical Analysis API unavailable at {TRADING_API_BASE_URL}"
-            }]
-        }
 
 
 def calculate_position_size(
