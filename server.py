@@ -534,8 +534,6 @@ def _build_metadata(
     usage_info = None
     if result_message and result_message.usage:
         usage = result_message.usage
-        # Debug logging to verify token data
-        print(f"[DEBUG] ResultMessage.usage: {usage}")
 
         # Extract individual token fields
         input_tokens = usage.get("input_tokens", 0)

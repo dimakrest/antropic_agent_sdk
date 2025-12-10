@@ -5,29 +5,30 @@ MCP tool functions for fetching stock data from the Technical Analysis API
 and calculating position sizes.
 """
 
+import json
+import os
 import httpx
+from claude_agent_sdk import tool, create_sdk_mcp_server
+
+# Configuration - must be set via environment variable
+TRADING_API_BASE_URL = os.getenv("TRADING_API_BASE_URL")
+if not TRADING_API_BASE_URL:
+    raise ValueError("TRADING_API_BASE_URL environment variable must be set")
 
 
-async def get_stock_data(
-    symbol: str,
-    period: str = "3mo",
-    interval: str = "1d"
-) -> dict:
+async def _get_stock_data_impl(args: dict) -> dict:
     """
+    Internal implementation of get_stock_data.
+
     Fetch stock data with technical analysis from API.
-
-    Args:
-        symbol: Stock ticker (e.g., "AAPL")
-        period: Time period - "1mo", "3mo", "6mo", "1y" (default: "3mo")
-        interval: Data interval - "1d", "1wk" (default: "1d")
-
-    Returns:
-        dict: Technical analysis data including price, volume, moving averages,
-              momentum indicators, volatility metrics, trend indicators,
-              support/resistance levels, and recent candles.
-              Returns {"error": "..."} on failure.
+    Returns MCP-formatted content response.
     """
-    url = f"http://localhost:8093/api/v1/stocks/{symbol}/analysis"
+    symbol = args["symbol"]
+    period = args["period"]
+    interval = args["interval"]
+
+    # Endpoint format: {base_url}/stocks/analysis/{symbol}
+    url = f"{TRADING_API_BASE_URL}/stocks/analysis/{symbol}"
 
     try:
         async with httpx.AsyncClient() as client:
@@ -37,13 +38,89 @@ async def get_stock_data(
             )
 
             if response.status_code == 404:
-                return {"error": f"Symbol not found: {symbol}"}
+                return {
+                    "content": [{
+                        "type": "text",
+                        "text": f"Error: Symbol '{symbol}' not found. This could mean: (1) the symbol is misspelled, (2) it's not a US-listed stock (NYSE/NASDAQ), or (3) the company may have been delisted. Please verify the ticker symbol with the user."
+                    }]
+                }
             if response.status_code != 200:
-                return {"error": f"API error: {response.status_code}"}
+                return {
+                    "content": [{
+                        "type": "text",
+                        "text": f"Error: API returned status {response.status_code}. The Trading Analyst API may be experiencing issues. Try again or inform the user that market data is temporarily unavailable."
+                    }]
+                }
 
-            return response.json()
+            data = response.json()
+            # Format as readable text for the agent
+            return {
+                "content": [{
+                    "type": "text",
+                    "text": json.dumps(data, indent=2)
+                }]
+            }
     except httpx.ConnectError:
-        return {"error": "Technical Analysis API unavailable at localhost:8093"}
+        return {
+            "content": [{
+                "type": "text",
+                "text": f"Error: Cannot connect to Trading Analyst API at {TRADING_API_BASE_URL}. The API service is not running. Inform the user that stock data is currently unavailable and they should ensure the Trading Analyst API is started."
+            }]
+        }
+
+
+# MCP Tool wrapper for the get_stock_data function
+get_stock_data_tool = tool(
+    name="get_stock_data",
+    description="""Fetch technical analysis data for a stock from the Trading Analyst API.
+
+RETURNS: Current price, moving averages (SMA 20/50/200, EMA 12/26), momentum indicators (RSI 14/7, MACD line/signal/histogram, Stochastic K/D, CCI with signal), volatility metrics (ATR 14/7, Bollinger Bands upper/middle/lower/width), trend indicators (ADX, +DI/-DI), support/resistance levels (3 each with pivot point), volume statistics (current, avg 20/50, ratio vs avg).
+
+USE THIS TOOL: For any stock analysis request. Never estimate or assume data values - always call this tool to get actual market data.
+
+LIMITATIONS: US stocks only (NYSE, NASDAQ). No fundamental data (earnings, P/E, revenue). Some indicators require sufficient data points (SMA-200 needs ~200 days of history, may return null with short periods).""",
+    input_schema={
+        "type": "object",
+        "properties": {
+            "symbol": {
+                "type": "string",
+                "description": "Stock ticker symbol in uppercase (e.g., 'AAPL' for Apple, 'MSFT' for Microsoft, 'NVDA' for NVIDIA, 'TSLA' for Tesla)"
+            },
+            "period": {
+                "type": "string",
+                "description": "Historical time period for analysis: '1mo', '3mo', '6mo', or '1y'",
+                "enum": ["1mo", "3mo", "6mo", "1y"]
+            },
+            "interval": {
+                "type": "string",
+                "description": "Data granularity: '15m' (15-minute intraday), '1d' (daily), or '1wk' (weekly)",
+                "enum": ["15m", "1d", "1wk"]
+            }
+        },
+        "required": ["symbol", "period", "interval"],
+        "additionalProperties": False
+    }
+)(_get_stock_data_impl)
+
+
+# Export the raw async function for testing and direct usage
+async def get_stock_data(args: dict) -> dict:
+    """
+    Fetch stock data with technical analysis from API.
+
+    This is a thin wrapper around _get_stock_data_impl for backwards
+    compatibility and testing purposes.
+
+    Args:
+        args: Dictionary containing:
+            - symbol: Stock ticker symbol (required)
+            - period: Time period "1mo", "3mo", "6mo", "1y" (required)
+            - interval: Data interval "15m", "1d", "1wk" (required)
+
+    Returns:
+        MCP-formatted content response with technical analysis data.
+    """
+    return await _get_stock_data_impl(args)
 
 
 def calculate_position_size(
@@ -105,3 +182,11 @@ def calculate_position_size(
             "percent_of_account": round(percent_of_account, 2)
         }
     }
+
+
+# Create MCP server with stock tools
+stock_tools_server = create_sdk_mcp_server(
+    name="stock_analysis",
+    version="1.0.0",
+    tools=[get_stock_data_tool]
+)

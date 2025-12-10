@@ -7,7 +7,7 @@ import httpx
 import time
 
 
-async def analyze_stock(client: httpx.AsyncClient, stock: str, request_id: int, port: int = 8002):
+async def analyze_stock(client: httpx.AsyncClient, stock: str, request_id: int, port: int = 8000):
     """Make single analyze request"""
     start = time.time()
     try:
