@@ -7,12 +7,12 @@ import httpx
 import time
 
 
-async def analyze_stock(client: httpx.AsyncClient, stock: str, request_id: int):
+async def analyze_stock(client: httpx.AsyncClient, stock: str, request_id: int, port: int = 8002):
     """Make single analyze request"""
     start = time.time()
     try:
         response = await client.post(
-            "http://localhost:8000/analyze",
+            f"http://localhost:{port}/analyze",
             json={"stock": stock}
         )
         elapsed = time.time() - start
