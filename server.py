@@ -32,6 +32,25 @@ SESSION_TIMEOUT = timedelta(hours=int(os.getenv("SESSION_TIMEOUT_HOURS", "1")))
 DEFAULT_PERMISSION_MODE = os.getenv("DEFAULT_PERMISSION_MODE", "default")
 MAX_TURNS = int(os.getenv("MAX_TURNS", "10"))
 DEFAULT_MODEL = os.getenv("CLAUDE_MODEL", "claude-sonnet-4-5-20250929")
+MAX_CONCURRENT_ANALYSES = int(os.getenv("MAX_CONCURRENT_ANALYSES", "5"))
+ANALYSIS_QUEUE_TIMEOUT = float(os.getenv("ANALYSIS_QUEUE_TIMEOUT", "15.0"))
+
+
+# =============================================================================
+# Concurrency Control
+# =============================================================================
+
+# Semaphore to limit concurrent /analyze requests
+# Initialized at module level, shared across all requests
+_analyze_semaphore: asyncio.Semaphore | None = None
+
+
+def get_analyze_semaphore() -> asyncio.Semaphore:
+    """Get or create the analyze semaphore (lazy initialization)."""
+    global _analyze_semaphore
+    if _analyze_semaphore is None:
+        _analyze_semaphore = asyncio.Semaphore(MAX_CONCURRENT_ANALYSES)
+    return _analyze_semaphore
 
 
 # =============================================================================
@@ -43,6 +62,8 @@ class HealthResponse(BaseModel):
     status: str
     active_sessions: int
     sdk_ready: bool = True
+    analyze_capacity: int = Field(..., description="Max concurrent /analyze requests")
+    analyze_available: int = Field(..., description="Available /analyze slots")
 
 
 class ChatRequest(BaseModel):
@@ -73,9 +94,27 @@ class ChatRequest(BaseModel):
 
 
 class UsageInfo(BaseModel):
-    """Token usage information"""
-    input_tokens: int = Field(..., description="Number of input tokens consumed")
+    """Token usage information.
+
+    Note: With prompt caching, `input_tokens` only represents non-cached tokens.
+    Use `total_input_tokens` for the true total input token count.
+
+    Formula: total_input_tokens = input_tokens + cache_creation_input_tokens + cache_read_input_tokens
+    """
+    input_tokens: int = Field(..., description="Non-cached input tokens (after last cache breakpoint)")
     output_tokens: int = Field(..., description="Number of output tokens generated")
+    cache_creation_input_tokens: int = Field(
+        0, description="Tokens used to create cache entries"
+    )
+    cache_read_input_tokens: int = Field(
+        0, description="Tokens read from cache (reduces cost)"
+    )
+    total_input_tokens: int = Field(
+        ..., description="Total input tokens (input + cache_creation + cache_read)"
+    )
+    total_cost_usd: Optional[float] = Field(
+        None, description="Total cost in USD (authoritative)"
+    )
 
 
 class ToolCall(BaseModel):
@@ -186,6 +225,12 @@ class AnalyzeResponse(BaseModel):
         None,
         description="Response metadata including model, usage, and tools"
     )
+
+
+class ServiceUnavailableResponse(BaseModel):
+    """Response when server is at capacity"""
+    detail: str = Field(..., description="Error message")
+    retry_after: int = Field(..., description="Seconds to wait before retrying")
 
 
 # JSON Schema for structured output (matches AnalyzeResponse)
@@ -491,10 +536,16 @@ app = FastAPI(
 @app.get("/health", response_model=HealthResponse)
 async def health_check():
     """Health check endpoint"""
+    semaphore = get_analyze_semaphore()
+    # Semaphore._value gives current available count
+    available = semaphore._value if hasattr(semaphore, '_value') else MAX_CONCURRENT_ANALYSES
+
     return HealthResponse(
         status="healthy",
         active_sessions=session_manager.get_active_session_count(),
-        sdk_ready=ANTHROPIC_API_KEY is not None
+        sdk_ready=ANTHROPIC_API_KEY is not None,
+        analyze_capacity=MAX_CONCURRENT_ANALYSES,
+        analyze_available=available
     )
 
 
@@ -519,9 +570,24 @@ def _build_metadata(
     """Build response metadata from collected data"""
     usage_info = None
     if result_message and result_message.usage:
+        usage = result_message.usage
+
+        # Extract individual token fields
+        input_tokens = usage.get("input_tokens", 0)
+        cache_creation = usage.get("cache_creation_input_tokens", 0)
+        cache_read = usage.get("cache_read_input_tokens", 0)
+
+        # Calculate TRUE total input tokens
+        # With caching: input_tokens only = non-cached portion
+        total_input = input_tokens + cache_creation + cache_read
+
         usage_info = UsageInfo(
-            input_tokens=result_message.usage.get("input_tokens", 0),
-            output_tokens=result_message.usage.get("output_tokens", 0)
+            input_tokens=input_tokens,
+            output_tokens=usage.get("output_tokens", 0),
+            cache_creation_input_tokens=cache_creation,
+            cache_read_input_tokens=cache_read,
+            total_input_tokens=total_input,
+            total_cost_usd=usage.get("total_cost_usd"),
         )
 
     return ResponseMetadata(
@@ -729,7 +795,10 @@ async def list_sessions():
     )
 
 
-@app.post("/analyze", response_model=AnalyzeResponse)
+@app.post("/analyze", response_model=AnalyzeResponse, responses={
+    429: {"description": "Rate limit exceeded (Claude API)"},
+    503: {"model": ServiceUnavailableResponse, "description": "Server at capacity"}
+})
 async def analyze_stock(request: AnalyzeRequest):
     """
     Analyze a stock for swing trading opportunities.
@@ -739,7 +808,26 @@ async def analyze_stock(request: AnalyzeRequest):
 
     This is a stateless endpoint - each request creates a temporary
     session that is automatically cleaned up after the response.
+
+    Concurrency is limited to MAX_CONCURRENT_ANALYSES (default: 5).
+    Requests exceeding capacity wait up to ANALYSIS_QUEUE_TIMEOUT seconds.
     """
+    semaphore = get_analyze_semaphore()
+
+    # Try to acquire semaphore with timeout
+    try:
+        await asyncio.wait_for(
+            semaphore.acquire(),
+            timeout=ANALYSIS_QUEUE_TIMEOUT
+        )
+    except asyncio.TimeoutError:
+        # Server at capacity, return 503
+        raise HTTPException(
+            status_code=503,
+            detail="Server at capacity. Please retry later.",
+            headers={"Retry-After": str(int(ANALYSIS_QUEUE_TIMEOUT))}
+        )
+
     client = None
 
     try:
@@ -840,6 +928,14 @@ async def analyze_stock(request: AnalyzeRequest):
     except HTTPException:
         raise
     except Exception as e:
+        # Handle Claude API rate limits (propagate as 429)
+        error_str = str(e).lower()
+        if "429" in error_str or "rate_limit" in error_str or "too many requests" in error_str:
+            raise HTTPException(
+                status_code=429,
+                detail="Claude API rate limit exceeded. Please retry later.",
+                headers={"Retry-After": "60"}
+            )
         raise HTTPException(
             status_code=500,
             detail=f"Analysis error: {str(e)}"
@@ -851,6 +947,8 @@ async def analyze_stock(request: AnalyzeRequest):
                 await client.disconnect()
             except Exception:
                 pass  # Ignore disconnect errors
+        # Release semaphore
+        semaphore.release()
 
 
 if __name__ == "__main__":

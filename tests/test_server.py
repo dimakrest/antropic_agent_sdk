@@ -3,6 +3,7 @@ Unit tests for HTTP Server with mocked Claude SDK
 Run with: pytest tests/test_server.py -v
 """
 
+import asyncio
 import pytest
 from fastapi.testclient import TestClient
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -120,6 +121,11 @@ def test_health_check(test_client):
     assert data["status"] == "healthy"
     assert "active_sessions" in data
     assert "sdk_ready" in data
+    # Verify capacity info is included
+    assert "analyze_capacity" in data
+    assert "analyze_available" in data
+    assert data["analyze_capacity"] > 0
+    assert data["analyze_available"] <= data["analyze_capacity"]
 
 
 def test_root_endpoint(test_client):
@@ -622,3 +628,19 @@ def test_analyze_response_includes_metadata(test_client, mock_sdk_client_for_ana
         assert metadata["system_prompt"] is not None  # Should have swing trading prompt
         assert "user_prompt" in metadata
         assert "TEST" in metadata["user_prompt"]  # User prompt should contain the stock symbol
+
+
+def test_analyze_returns_503_when_at_capacity(test_client):
+    """Test that /analyze returns 503 when server is at capacity (semaphore timeout)"""
+    # Mock asyncio.wait_for to raise TimeoutError, simulating exhausted semaphore
+    with patch('server.asyncio.wait_for', side_effect=asyncio.TimeoutError()):
+        response = test_client.post("/analyze", json={
+            "stock": "TEST"
+        })
+
+        assert response.status_code == 503
+        data = response.json()
+        assert "capacity" in data["detail"].lower()
+
+        # Verify Retry-After header is present
+        assert "retry-after" in response.headers
