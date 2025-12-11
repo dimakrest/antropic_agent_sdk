@@ -44,7 +44,7 @@ async def _fetch_stock_data(
     url = f"{TRADING_API_BASE_URL}/stocks/analysis/{symbol}"
     params = {"period": period, "interval": interval}
     if analysis_date:
-        params["analysis_date"] = analysis_date
+        params["as_of_date"] = analysis_date
 
     try:
         async with httpx.AsyncClient() as client:

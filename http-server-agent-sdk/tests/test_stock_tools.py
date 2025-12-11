@@ -13,7 +13,7 @@ import os
 # Add parent directory to path for imports
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from stock_tools import get_stock_data, calculate_position_size, stock_tools_server
+from stock_tools import _fetch_stock_data, calculate_position_size, create_stock_tools_server
 
 
 # =============================================================================
@@ -167,9 +167,17 @@ class TestStockToolsServer:
 
     def test_server_created(self):
         """Verify MCP server is properly configured"""
-        assert stock_tools_server is not None
-        assert stock_tools_server["type"] == "sdk"
-        assert stock_tools_server["name"] == "stock_analysis"
+        server = create_stock_tools_server()
+        assert server is not None
+        assert server["type"] == "sdk"
+        assert server["name"] == "stock_analysis"
+
+    def test_server_with_analysis_date(self):
+        """Verify MCP server can be created with analysis_date"""
+        server = create_stock_tools_server(analysis_date="2024-06-15")
+        assert server is not None
+        assert server["type"] == "sdk"
+        assert server["name"] == "stock_analysis"
 
 
 # =============================================================================
@@ -248,7 +256,7 @@ def mock_analysis_api_response():
 
 
 class TestGetStockDataUnit:
-    """Unit tests for get_stock_data MCP tool with mocked API"""
+    """Unit tests for _fetch_stock_data with mocked API"""
 
     @pytest.mark.asyncio
     async def test_response_structure(self, mock_analysis_api_response, mocker):
@@ -264,8 +272,8 @@ class TestGetStockDataUnit:
 
         mocker.patch("httpx.AsyncClient", return_value=mock_client)
 
-        # Use args dict pattern for MCP tool
-        result = await get_stock_data({"symbol": "AAPL", "period": "3mo"})
+        # Use _fetch_stock_data directly
+        result = await _fetch_stock_data(symbol="AAPL", period="3mo")
 
         # Verify MCP content format
         assert "content" in result
@@ -294,7 +302,7 @@ class TestGetStockDataUnit:
 
         mocker.patch("httpx.AsyncClient", return_value=mock_client)
 
-        result = await get_stock_data({"symbol": "AAPL"})
+        result = await _fetch_stock_data(symbol="AAPL")
 
         # Verify MCP error format
         assert "content" in result
@@ -313,7 +321,7 @@ class TestGetStockDataUnit:
 
         mocker.patch("httpx.AsyncClient", return_value=mock_client)
 
-        result = await get_stock_data({"symbol": "INVALID123"})
+        result = await _fetch_stock_data(symbol="INVALID123")
 
         assert "content" in result
         assert "not found" in result["content"][0]["text"].lower()
@@ -331,7 +339,7 @@ class TestGetStockDataUnit:
 
         mocker.patch("httpx.AsyncClient", return_value=mock_client)
 
-        result = await get_stock_data({"symbol": "AAPL"})
+        result = await _fetch_stock_data(symbol="AAPL")
 
         assert "content" in result
         assert "500" in result["content"][0]["text"]
@@ -350,7 +358,7 @@ class TestGetStockDataUnit:
 
         mocker.patch("httpx.AsyncClient", return_value=mock_client)
 
-        await get_stock_data({"symbol": "AAPL"})
+        await _fetch_stock_data(symbol="AAPL")
 
         # Verify the call was made with default params
         mock_client.get.assert_called_once()
@@ -372,7 +380,7 @@ class TestGetStockDataUnit:
 
         mocker.patch("httpx.AsyncClient", return_value=mock_client)
 
-        await get_stock_data({"symbol": "MSFT", "period": "6mo", "interval": "1wk"})
+        await _fetch_stock_data(symbol="MSFT", period="6mo", interval="1wk")
 
         call_args = mock_client.get.call_args
         # URL format: /api/v1/stocks/analysis/{symbol}
@@ -393,7 +401,7 @@ class TestGetStockDataIntegration:
     async def test_real_api_aapl(self):
         """Integration test with real API for AAPL"""
         import json
-        result = await get_stock_data({"symbol": "AAPL", "period": "1mo"})
+        result = await _fetch_stock_data(symbol="AAPL", period="1mo")
 
         # Check for API unavailable error
         if "unavailable" in result["content"][0]["text"].lower():
@@ -412,7 +420,7 @@ class TestGetStockDataIntegration:
     @pytest.mark.asyncio
     async def test_real_api_invalid_symbol(self):
         """Integration test - invalid symbol handling"""
-        result = await get_stock_data({"symbol": "THISSYMBOLSHOULDNOTEXIST12345"})
+        result = await _fetch_stock_data(symbol="THISSYMBOLSHOULDNOTEXIST12345")
 
         # Check for API unavailable error
         if "unavailable" in result["content"][0]["text"].lower():
@@ -426,7 +434,7 @@ class TestGetStockDataIntegration:
     async def test_real_api_different_periods(self):
         """Integration test - verify different periods work"""
         import json
-        result = await get_stock_data({"symbol": "MSFT", "period": "6mo", "interval": "1wk"})
+        result = await _fetch_stock_data(symbol="MSFT", period="6mo", interval="1wk")
 
         # Check for API unavailable error
         if "unavailable" in result["content"][0]["text"].lower():
