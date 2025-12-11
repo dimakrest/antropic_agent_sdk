@@ -567,16 +567,17 @@ def mock_sdk_client_for_analyze():
                 "output_tokens": 200
             }
         )
-        # Add structured output
+        # Add structured output (new Hunter format)
         result_msg.structured_output = {
-            "stock": "TEST",
-            "recommendation": "Buy",
-            "entry_price": 100.0,
-            "stop_loss": 95.0,
-            "take_profit": 110.0,
-            "reasoning": "Test analysis",
-            "missing_tools": [],
-            "confidence_score": 75
+            "ticker": "TEST",
+            "conviction_score": 8,
+            "decision": "EXECUTE_TRADE",
+            "analysis": {
+                "macro_verdict": "Daily chart shows tight consolidation near 52-week highs.",
+                "micro_verdict": "Hourly chart shows strong green candle with high volume.",
+                "risk_assessment": "Favorable 1:3 risk/reward ratio."
+            },
+            "trader_journal": "Energy coiled on daily, explosive ignition on hourly. Sector support present."
         }
         yield result_msg
 
@@ -593,7 +594,16 @@ def test_analyze_response_includes_metadata(test_client, mock_sdk_client_for_ana
 
         assert response.status_code == 200
         data = response.json()
-        assert data["recommendation"] == "Buy"
+
+        # Verify new Hunter response format
+        assert data["ticker"] == "TEST"
+        assert data["conviction_score"] == 8
+        assert data["decision"] == "EXECUTE_TRADE"
+        assert "analysis" in data
+        assert data["analysis"]["macro_verdict"] is not None
+        assert data["analysis"]["micro_verdict"] is not None
+        assert data["analysis"]["risk_assessment"] is not None
+        assert data["trader_journal"] is not None
 
         # Verify metadata structure
         assert "metadata" in data

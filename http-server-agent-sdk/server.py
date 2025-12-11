@@ -184,29 +184,33 @@ class AnalyzeRequest(BaseModel):
     )
 
 
+class AnalysisDetail(BaseModel):
+    """Analysis details for volatility breakout strategy"""
+    macro_verdict: str = Field(..., description="Daily chart context assessment")
+    micro_verdict: str = Field(..., description="Hourly chart trigger assessment")
+    risk_assessment: str = Field(..., description="Risk evaluation summary")
+
+
 class AnalyzeResponse(BaseModel):
-    """Response model for swing trading analysis"""
-    stock: str = Field(..., description="The input ticker symbol")
-    recommendation: str = Field(
-        ...,
-        description="Trading recommendation: 'Buy' or 'Not Buy'"
-    )
-    entry_price: float = Field(..., description="Recommended entry price")
-    stop_loss: float = Field(..., description="Stop loss price level")
-    take_profit: float = Field(..., description="Take profit target price")
-    reasoning: str = Field(
-        ...,
-        description="Professional analysis explaining the decision"
-    )
-    missing_tools: List[str] = Field(
-        ...,
-        description="Indicators/data that would increase confidence"
-    )
-    confidence_score: int = Field(
+    """Response model for volatility breakout analysis"""
+    ticker: str = Field(..., description="The input ticker symbol")
+    conviction_score: int = Field(
         ...,
         ge=0,
-        le=100,
-        description="Confidence in the recommendation (0-100)"
+        le=10,
+        description="Conviction score (0-10): 0-4 PASS, 5-7 WATCH, 8-10 KILL"
+    )
+    decision: str = Field(
+        ...,
+        description="Trading decision: 'EXECUTE_TRADE', 'WATCHLIST', or 'PASS'"
+    )
+    analysis: AnalysisDetail = Field(
+        ...,
+        description="Analysis breakdown with macro/micro verdicts and risk"
+    )
+    trader_journal: str = Field(
+        ...,
+        description="2-sentence summary of the trade setup"
     )
     metadata: Optional[ResponseMetadata] = Field(
         None,
@@ -224,76 +228,82 @@ class ServiceUnavailableResponse(BaseModel):
 TRADING_RECOMMENDATION_SCHEMA = {
     "type": "object",
     "properties": {
-        "stock": {"type": "string"},
-        "recommendation": {
-            "type": "string",
-            "enum": ["Buy", "Not Buy"]
-        },
-        "entry_price": {"type": "number"},
-        "stop_loss": {"type": "number"},
-        "take_profit": {"type": "number"},
-        "reasoning": {"type": "string"},
-        "missing_tools": {
-            "type": "array",
-            "items": {"type": "string"}
-        },
-        "confidence_score": {
+        "ticker": {"type": "string"},
+        "conviction_score": {
             "type": "integer",
             "minimum": 0,
-            "maximum": 100
-        }
+            "maximum": 10
+        },
+        "decision": {
+            "type": "string",
+            "enum": ["EXECUTE_TRADE", "WATCHLIST", "PASS"]
+        },
+        "analysis": {
+            "type": "object",
+            "properties": {
+                "macro_verdict": {"type": "string"},
+                "micro_verdict": {"type": "string"},
+                "risk_assessment": {"type": "string"}
+            },
+            "required": ["macro_verdict", "micro_verdict", "risk_assessment"],
+            "additionalProperties": False
+        },
+        "trader_journal": {"type": "string"}
     },
     "required": [
-        "stock",
-        "recommendation",
-        "entry_price",
-        "stop_loss",
-        "take_profit",
-        "reasoning",
-        "missing_tools",
-        "confidence_score"
+        "ticker",
+        "conviction_score",
+        "decision",
+        "analysis",
+        "trader_journal"
     ],
     "additionalProperties": False
 }
 
 
-SWING_TRADING_SYSTEM_PROMPT = """You are a professional swing trader specializing in short-term trades with 3-5 day holding periods.
+SWING_TRADING_SYSTEM_PROMPT = """Role: You are "The Hunter," an elite algorithmic trading strategist specializing in Volatility Breakouts. You are aggressive but highly disciplined. You do not just "buy green candles"; you look for structural tension followed by an explosive release.
 
-## Your Role
-You ARE the trading expert. Apply your own trading expertise and judgment to analyze stocks and provide actionable recommendations.
+Your Objective: Analyze the provided market data to determine if a stock is undergoing a high-probability breakout that justifies a 1:3 Risk/Reward trade.
 
-## Analysis Process
-1. Analyze the stock using your trading expertise
-2. Make a binary decision: Buy or Not Buy (no "Hold" or "Maybe")
-3. Provide specific price levels for entry, stop loss, and take profit
+Your Input Data: You will receive a JSON payload containing two "Dimensions" of data:
 
-## Decision Framework
-- Focus on swing trade setups with 3-5 day holding period
-- Favor favorable risk/reward ratios (ideally 2:1 or better)
-- Always set a stop loss - risk management is non-negotiable
-- Consider trend direction, momentum, and key support/resistance levels
+The Physics (Price Action): A narrative description of the last 3 candles on both the Daily (Context) and Hourly (Trigger) timeframes.
 
-## Key Indicators to Consider
-- RSI: Look for momentum confirmation (not overbought >70 or oversold <30 for entries)
-- MACD: Trend direction and potential crossovers
-- Moving Averages: Price relative to 20, 50, 200 SMA for trend context
-- Support/Resistance: Key levels for entry and stop placement
-- Volume: Confirmation of price moves
-- ATR: For appropriate stop loss and target distance
+The Atmosphere (Context): Data on Sector performance, Market Regime, and Volatility.
 
-## Output Requirements
-- recommendation: "Buy" or "Not Buy" - binary decision only
-- entry_price: Specific price (can be current price for immediate entry or limit near support)
-- stop_loss: Below recent support or based on ATR
-- take_profit: Based on resistance levels or risk/reward calculation
-- reasoning: Professional analysis explaining your decision (2-4 sentences)
-- missing_tools: What additional data would improve your analysis
-- confidence_score: 0-100 based on signal alignment (informational only)
+Your Decision Process (The "Mental Model"):
 
-## Important Notes
-- If data is unavailable or insufficient, recommend "Not Buy" with reasoning
-- Never recommend buying without proper risk/reward setup
-- Be conservative with confidence scores - reserve >80 for very clear setups
+Phase 1: Analyze the Context (Daily Chart)
+
+Safety Check: Read the macro_story_D1. Are we in a clean uptrend, or hitting a wall?
+
+Rejection Check: Look for "Long Upper Wicks" in the Daily story. If sellers are rejecting higher prices, be very skeptical of any breakout.
+
+The Ideal: You want to see "Tight Consolidation," "Inside Bars," or "Small Dojis" on the Daily chart. This means energy is stored.
+
+Phase 2: Analyze the Trigger (Hourly Chart)
+
+Momentum: Read the micro_story_H1. You need to see a "Battle Sequence" where buyers are winning.
+
+The Ignition: The most recent candle must be strong (Green, Full Body). If the latest candle is a "Doji" or "Red," there is no trigger. PASS immediately.
+
+Volume: Look for words like "Explosive," "Surging," or "High Participation." A breakout on low volume is a trap.
+
+Phase 3: Weigh the Atmosphere
+
+Tailwind: Is the sector_health bullish? If the sector is Red, the trade requires a higher conviction score to pass.
+
+Landmines: Check earnings_proximity. If earnings are < 48 hours away, apply a massive penalty to your score.
+
+Phase 4: The Conviction Score (0-10)
+
+0-4 (PASS): Weak setup, choppy context, or active selling pressure.
+
+5-7 (WATCH): Good chart, but the market/sector is bad, or the volume is weak.
+
+8-10 (KILL): Perfect "Coil" on Daily + Explosive "Ignition" on Hourly + Sector Support.
+
+Output Format: You must respond with a strictly valid JSON object. Do not include markdown formatting (like ```json) outside the object.
 """
 
 
@@ -846,32 +856,43 @@ async def analyze_stock(request: AnalyzeRequest):
 
             if proc.result_message.subtype == "success" and hasattr(proc.result_message, 'structured_output'):
                 output = proc.result_message.structured_output
-                return AnalyzeResponse(**output, metadata=metadata)
+                # Convert analysis dict to AnalysisDetail object
+                analysis_data = output.get("analysis", {})
+                return AnalyzeResponse(
+                    ticker=output["ticker"],
+                    conviction_score=output["conviction_score"],
+                    decision=output["decision"],
+                    analysis=AnalysisDetail(**analysis_data),
+                    trader_journal=output["trader_journal"],
+                    metadata=metadata
+                )
 
             elif proc.result_message.subtype == "error_max_structured_output_retries":
                 # Agent couldn't produce valid structured output
                 return AnalyzeResponse(
-                    stock=request.stock.upper(),
-                    recommendation="Not Buy",
-                    entry_price=0,
-                    stop_loss=0,
-                    take_profit=0,
-                    reasoning="Unable to complete analysis - agent could not produce valid structured output after multiple attempts.",
-                    missing_tools=["Stable analysis pipeline"],
-                    confidence_score=0,
+                    ticker=request.stock.upper(),
+                    conviction_score=0,
+                    decision="PASS",
+                    analysis=AnalysisDetail(
+                        macro_verdict="Unable to analyze",
+                        micro_verdict="Unable to analyze",
+                        risk_assessment="Analysis failed - agent could not produce valid structured output after multiple attempts."
+                    ),
+                    trader_journal="Analysis failed due to structured output error. No trade recommendation possible.",
                     metadata=metadata
                 )
             else:
                 # Other error
                 return AnalyzeResponse(
-                    stock=request.stock.upper(),
-                    recommendation="Not Buy",
-                    entry_price=0,
-                    stop_loss=0,
-                    take_profit=0,
-                    reasoning=f"Analysis failed with status: {proc.result_message.subtype}",
-                    missing_tools=[],
-                    confidence_score=0,
+                    ticker=request.stock.upper(),
+                    conviction_score=0,
+                    decision="PASS",
+                    analysis=AnalysisDetail(
+                        macro_verdict="Unable to analyze",
+                        micro_verdict="Unable to analyze",
+                        risk_assessment=f"Analysis failed with status: {proc.result_message.subtype}"
+                    ),
+                    trader_journal="Analysis failed due to an error. No trade recommendation possible.",
                     metadata=metadata
                 )
 
