@@ -21,7 +21,6 @@ from claude_agent_sdk import (
     ResultMessage,
 )
 from claude_agent_sdk.types import TextBlock, ToolUseBlock
-from stock_tools import create_stock_tools_server
 
 # Load environment variables
 load_dotenv()
@@ -183,11 +182,6 @@ class AnalyzeRequest(BaseModel):
         max_length=10,
         description="Stock ticker symbol (e.g., 'AAPL', 'MSFT')"
     )
-    analysis_date: Optional[str] = Field(
-        None,
-        description="Historical analysis date (YYYY-MM-DD). Omit for current date.",
-        pattern=r"^\d{4}-\d{2}-\d{2}$"
-    )
 
 
 class AnalyzeResponse(BaseModel):
@@ -269,10 +263,9 @@ SWING_TRADING_SYSTEM_PROMPT = """You are a professional swing trader specializin
 You ARE the trading expert. Apply your own trading expertise and judgment to analyze stocks and provide actionable recommendations.
 
 ## Analysis Process
-1. ALWAYS use the get_stock_data tool to fetch current technical analysis data
-2. Analyze the data using your trading expertise
-3. Make a binary decision: Buy or Not Buy (no "Hold" or "Maybe")
-4. Provide specific price levels for entry, stop loss, and take profit
+1. Analyze the stock using your trading expertise
+2. Make a binary decision: Buy or Not Buy (no "Hold" or "Maybe")
+3. Provide specific price levels for entry, stop loss, and take profit
 
 ## Decision Framework
 - Focus on swing trade setups with 3-5 day holding period
@@ -819,16 +812,12 @@ async def analyze_stock(request: AnalyzeRequest):
     client = None
 
     try:
-        # Create MCP server with analysis_date bound (or None for current date)
-        stock_server = create_stock_tools_server(analysis_date=request.analysis_date)
-
-        # Create SDK options with stock tools and structured output
+        # Create SDK options with structured output (no tools)
         options = ClaudeAgentOptions(
             model=DEFAULT_MODEL,
-            permission_mode="bypassPermissions",  # Tools are safe, no user interaction
-            max_turns=5,  # Limit turns for focused analysis
-            mcp_servers={"stock_analysis": stock_server},
-            allowed_tools=["mcp__stock_analysis__get_stock_data"],
+            permission_mode="bypassPermissions",
+            max_turns=1,  # Single turn, no tool loops
+            allowed_tools=[],  # No tools
             system_prompt=SWING_TRADING_SYSTEM_PROMPT,
             output_format={
                 "type": "json_schema",

@@ -77,7 +77,7 @@ The `metadata` field must contain:
 ### Tool Call Structure
 
 Each tool call in `tool_calls` contains:
-- `name`: Tool name (e.g., "Read", "Bash", "mcp__stock_analysis__get_stock_data")
+- `name`: Tool name (e.g., "Read", "Bash")
 - `input`: Dictionary of parameters passed to the tool
 - `count`: Number of times this exact call (same name + params) was made
 
@@ -134,26 +134,8 @@ return YourResponse(..., metadata=metadata)
     "system_prompt": "You are a professional swing trader...",
     "user_prompt": "Analyze AAPL for swing trading opportunities",
     "usage": {"input_tokens": 100, "output_tokens": 50},
-    "tool_calls": [
-      {"name": "mcp__stock_analysis__get_stock_data", "input": {"symbol": "AAPL"}, "count": 1},
-      {"name": "Read", "input": {"path": "/data/analysis.txt"}, "count": 2}
-    ]
+    "tool_calls": []
   }
 }
 ```
 
-## External API: Trading Analyst API
-
-The stock tools (`stock_tools.py`) connect to an external **Trading Analyst API**.
-
-**Configuration**: Set via `TRADING_API_BASE_URL` environment variable (required, no default)
-
-### Stock Analysis Endpoint
-
-**`GET /api/v1/stocks/analysis/{symbol}`** - Complete technical analysis
-
-**Parameters** (all required):
-- `period`: Time period - `1mo`, `3mo`, `6mo`, `1y`
-- `interval`: Data interval - `15m` (intraday), `1d`, `1wk`
-
-**Returns**: Moving averages, momentum (RSI, MACD, Stochastic, CCI), volatility (ATR, Bollinger Bands), trend (ADX), support/resistance levels, volume statistics

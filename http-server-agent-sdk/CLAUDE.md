@@ -24,8 +24,8 @@ uv run pytest tests/test_server.py -v
 # Run tests with coverage
 uv run pytest tests/test_server.py --cov=server --cov-report=term
 
-# Run integration tests (requires server on port 8001 + Trading API on port 8131)
-uv run python tests/test_analyze_integration.py
+# Run integration tests (requires server on port 8001)
+uv run python tests/integration_test.py
 
 # Install/sync dependencies
 uv sync
@@ -95,7 +95,7 @@ The `usage` field contains token counts with prompt caching support:
 ### Tool Call Structure
 
 Each tool call in `tool_calls` contains:
-- `name`: Tool name (e.g., "Read", "Bash", "mcp__stock_analysis__get_stock_data")
+- `name`: Tool name (e.g., "Read", "Bash")
 - `input`: Dictionary of parameters passed to the tool
 - `count`: Number of times this exact call (same name + params) was made
 
@@ -159,44 +159,23 @@ return YourResponse(..., metadata=metadata)
       "total_input_tokens": 46662,
       "total_cost_usd": null
     },
-    "tool_calls": [
-      {"name": "mcp__stock_analysis__get_stock_data", "input": {"symbol": "AAPL"}, "count": 1},
-      {"name": "Read", "input": {"path": "/data/analysis.txt"}, "count": 2}
-    ]
+    "tool_calls": []
   }
 }
 ```
 
 ## /analyze Endpoint
 
-**`POST /analyze`** - Analyze a stock for swing trading opportunities
+**`POST /analyze`** - Analyze a stock for swing trading opportunities (no tools, pure LLM analysis)
 
 ### Request Body
 
 | Field | Type | Required | Description |
 |-------|------|----------|-------------|
 | `stock` | string | Yes | Stock ticker symbol (e.g., "AAPL", "MSFT") |
-| `analysis_date` | string | No | Historical analysis date in `YYYY-MM-DD` format |
 
-### analysis_date Behavior
-
-- **If provided**: Analysis uses data as of that date (passed to downstream Trading API)
-- **If omitted**: Uses current date (default behavior)
-- **Transparency**: The agent does NOT see this parameter - it's injected transparently via closure in the MCP tool
-
-### Example Requests
+### Example Request
 
 ```json
-// Current date analysis (default)
 {"stock": "AAPL"}
-
-// Historical analysis
-{"stock": "AAPL", "analysis_date": "2024-06-15"}
 ```
-
-### Date Format Validation
-
-The `analysis_date` must match the pattern `YYYY-MM-DD`. Invalid formats return HTTP 422:
-- `2024/06/15` - Invalid (wrong separator)
-- `20240615` - Invalid (no separators)
-- `2024-06-15` - Valid

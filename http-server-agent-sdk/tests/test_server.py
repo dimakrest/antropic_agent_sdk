@@ -5,7 +5,7 @@ Run with: pytest tests/test_server.py -v
 
 import pytest
 from fastapi.testclient import TestClient
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, patch
 from datetime import datetime, timedelta
 import sys
 import os
@@ -545,11 +545,10 @@ def mock_sdk_client_for_analyze():
     mock.disconnect = AsyncMock()
 
     async def mock_receive_response():
-        # Simulate assistant message with MCP tool use
+        # Simulate assistant message (no tools)
         assistant_msg = AssistantMessage(
             content=[
-                ToolUseBlock(id="tool_1", name="mcp__stock_analysis__get_stock_data", input={"symbol": "TEST"}),
-                TextBlock(text="Analyzing stock data...")
+                TextBlock(text="Analyzing...")
             ],
             model="claude-sonnet-4-5-20250929"
         )
@@ -561,7 +560,7 @@ def mock_sdk_client_for_analyze():
             duration_ms=200,
             duration_api_ms=150,
             is_error=False,
-            num_turns=2,
+            num_turns=1,
             session_id="test-analyze-session",
             usage={
                 "input_tokens": 500,
@@ -586,7 +585,7 @@ def mock_sdk_client_for_analyze():
 
 
 def test_analyze_response_includes_metadata(test_client, mock_sdk_client_for_analyze):
-    """Test that /analyze response includes metadata with model, usage, and tools"""
+    """Test that /analyze response includes metadata with model and usage"""
     with patch('server.ClaudeSDKClient', return_value=mock_sdk_client_for_analyze):
         response = test_client.post("/analyze", json={
             "stock": "TEST"
@@ -608,88 +607,12 @@ def test_analyze_response_includes_metadata(test_client, mock_sdk_client_for_ana
         assert metadata["usage"]["input_tokens"] == 500
         assert metadata["usage"]["output_tokens"] == 200
 
-        # Verify tool_calls includes MCP tool with params
+        # Verify tool_calls is empty (no tools)
         assert "tool_calls" in metadata
-        tool_calls = metadata["tool_calls"]
-        assert len(tool_calls) == 1
-        assert tool_calls[0]["name"] == "mcp__stock_analysis__get_stock_data"
-        assert tool_calls[0]["input"] == {"symbol": "TEST"}
-        assert tool_calls[0]["count"] == 1
+        assert metadata["tool_calls"] == []
 
         # Verify system_prompt and user_prompt are present
         assert "system_prompt" in metadata
-        assert metadata["system_prompt"] is not None  # Should have swing trading prompt
+        assert metadata["system_prompt"] is not None
         assert "user_prompt" in metadata
-        assert "TEST" in metadata["user_prompt"]  # User prompt should contain the stock symbol
-
-
-def test_analyze_with_analysis_date(test_client, mock_sdk_client_for_analyze):
-    """Test /analyze with analysis_date parameter"""
-    with patch('server.ClaudeSDKClient', return_value=mock_sdk_client_for_analyze):
-        with patch('server.create_stock_tools_server') as mock_factory:
-            mock_factory.return_value = MagicMock()  # Return mock MCP server
-
-            response = test_client.post("/analyze", json={
-                "stock": "TEST",
-                "analysis_date": "2024-06-15"
-            })
-
-            assert response.status_code == 200
-            # Verify factory was called with the date
-            mock_factory.assert_called_once_with(analysis_date="2024-06-15")
-
-
-def test_analyze_without_analysis_date(test_client, mock_sdk_client_for_analyze):
-    """Test /analyze without analysis_date (default behavior)"""
-    with patch('server.ClaudeSDKClient', return_value=mock_sdk_client_for_analyze):
-        with patch('server.create_stock_tools_server') as mock_factory:
-            mock_factory.return_value = MagicMock()
-
-            response = test_client.post("/analyze", json={
-                "stock": "TEST"
-            })
-
-            assert response.status_code == 200
-            # Verify factory was called with None
-            mock_factory.assert_called_once_with(analysis_date=None)
-
-
-def test_analyze_invalid_date_format(test_client):
-    """Test /analyze rejects invalid date format"""
-    response = test_client.post("/analyze", json={
-        "stock": "TEST",
-        "analysis_date": "2024/06/15"  # Wrong format
-    })
-    assert response.status_code == 422  # Validation error
-
-
-def test_analyze_invalid_date_format_no_dashes(test_client):
-    """Test /analyze rejects date without dashes"""
-    response = test_client.post("/analyze", json={
-        "stock": "TEST",
-        "analysis_date": "20240615"
-    })
-    assert response.status_code == 422
-
-
-@pytest.mark.asyncio
-async def test_create_stock_tools_server_with_date():
-    """Test factory function binds analysis_date correctly"""
-    from stock_tools import create_stock_tools_server
-
-    # Create server with date
-    server = create_stock_tools_server(analysis_date="2024-06-15")
-
-    # Verify server was created (basic sanity check)
-    assert server is not None
-    assert server["name"] == "stock_analysis"
-
-
-@pytest.mark.asyncio
-async def test_create_stock_tools_server_without_date():
-    """Test factory function works without date"""
-    from stock_tools import create_stock_tools_server
-
-    server = create_stock_tools_server()
-    assert server is not None
-    assert server["name"] == "stock_analysis"
+        assert "TEST" in metadata["user_prompt"]
