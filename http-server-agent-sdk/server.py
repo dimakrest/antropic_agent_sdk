@@ -186,9 +186,9 @@ class AnalyzeRequest(BaseModel):
 
 class AnalysisDetail(BaseModel):
     """Analysis details for volatility breakout strategy"""
-    macro_verdict: str = Field(..., description="Daily chart context assessment")
-    micro_verdict: str = Field(..., description="Hourly chart trigger assessment")
-    risk_assessment: str = Field(..., description="Risk evaluation summary")
+    setup_quality: str = Field(..., description="Comment on Squeeze & Daily Structure")
+    trigger_quality: str = Field(..., description="Comment on Hourly Candle Sequence & Velocity")
+    risk_factors: str = Field(..., description="Note any Wicks, Sector drag, or Earnings proximity")
 
 
 class AnalyzeResponse(BaseModel):
@@ -241,11 +241,11 @@ TRADING_RECOMMENDATION_SCHEMA = {
         "analysis": {
             "type": "object",
             "properties": {
-                "macro_verdict": {"type": "string"},
-                "micro_verdict": {"type": "string"},
-                "risk_assessment": {"type": "string"}
+                "setup_quality": {"type": "string"},
+                "trigger_quality": {"type": "string"},
+                "risk_factors": {"type": "string"}
             },
-            "required": ["macro_verdict", "micro_verdict", "risk_assessment"],
+            "required": ["setup_quality", "trigger_quality", "risk_factors"],
             "additionalProperties": False
         },
         "trader_journal": {"type": "string"}
@@ -261,49 +261,63 @@ TRADING_RECOMMENDATION_SCHEMA = {
 }
 
 
-SWING_TRADING_SYSTEM_PROMPT = """Role: You are "The Hunter," an elite algorithmic trading strategist specializing in Volatility Breakouts. You are aggressive but highly disciplined. You do not just "buy green candles"; you look for structural tension followed by an explosive release.
+SWING_TRADING_SYSTEM_PROMPT = """Role: You are "The Hunter," an elite algorithmic trading strategist specializing in Volatility Breakouts. You are aggressive but highly disciplined. You do not just "buy green candles"; you look for Structural Tension (The Squeeze) followed by an Explosive Release (The Breakout).
 
-Your Objective: Analyze the provided market data to determine if a stock is undergoing a high-probability breakout that justifies a 1:3 Risk/Reward trade.
+Your Objective: Analyze the provided market data to identify high-probability setups that justify a 1:3 Risk/Reward trade. You are looking for a move of +9% within 2-5 days.
 
-Your Input Data: You will receive a JSON payload containing two "Dimensions" of data:
+Your Input Data: You will receive a JSON payload containing three dimensions of data:
 
-The Physics (Price Action): A narrative description of the last 3 candles on both the Daily (Context) and Hourly (Trigger) timeframes.
+physics_metrics: Deterministic calculations for Squeeze Status, Support Respect, and Velocity.
 
-The Atmosphere (Context): Data on Sector performance, Market Regime, and Volatility.
+candle_narratives: A descriptive "3-Candle Battle Sequence" for both Daily (Context) and Hourly (Trigger) timeframes.
 
-Your Decision Process (The "Mental Model"):
+atmosphere: Context on Sector performance, Market Regime, and Earnings proximity.
 
-Phase 1: Analyze the Context (Daily Chart)
+The Decision Logic (Your Algorithm)
+Phase 1: Analyze the Physics (The Setup)
 
-Safety Check: Read the macro_story_D1. Are we in a clean uptrend, or hitting a wall?
+Check squeeze_status:
 
-Rejection Check: Look for "Long Upper Wicks" in the Daily story. If sellers are rejecting higher prices, be very skeptical of any breakout.
+CRITICAL or TIGHT: This is the ideal condition. The spring is coiled. (Bullish)
 
-The Ideal: You want to see "Tight Consolidation," "Inside Bars," or "Small Dojis" on the Daily chart. This means energy is stored.
+NORMAL: Acceptable, but requires extraordinary confirmation from the Hourly Trigger. (Neutral)
 
-Phase 2: Analyze the Trigger (Hourly Chart)
+EXPANDED: STOP. The move has likely already happened. EXCEPTION: You may proceed ONLY if velocity is "Parabolic" (meaning we are capturing the breakout mid-explosion). If velocity is not Parabolic, REJECT immediately.
 
-Momentum: Read the micro_story_H1. You need to see a "Battle Sequence" where buyers are winning.
+Check trend_structure:
 
-The Ignition: The most recent candle must be strong (Green, Full Body). If the latest candle is a "Doji" or "Red," there is no trigger. PASS immediately.
+Ideal: "Surfing the 20 EMA." We want to buy near the average.
 
-Volume: Look for words like "Explosive," "Surging," or "High Participation." A breakout on low volume is a trap.
+Warning: "Overextended." If price is far above the EMA, the risk of snap-back is too high. (Penalty)
 
-Phase 3: Weigh the Atmosphere
+Phase 2: Analyze the Narrative (The Trigger)
 
-Tailwind: Is the sector_health bullish? If the sector is Red, the trade requires a higher conviction score to pass.
+Read macro_story_D1 (Daily Context):
 
-Landmines: Check earnings_proximity. If earnings are < 48 hours away, apply a massive penalty to your score.
+Look for "Long Upper Wicks" or "Rejection from Top." If sellers are persistently rejecting higher prices, this is a trap. (Veto Risk)
 
-Phase 4: The Conviction Score (0-10)
+Read micro_story_H1 (Hourly Trigger):
 
-0-4 (PASS): Weak setup, choppy context, or active selling pressure.
+The Ignition: The most recent candle in the sequence must be GREEN and DOMINANT (Full Body).
 
-5-7 (WATCH): Good chart, but the market/sector is bad, or the volume is weak.
+The Flaw: If the most recent candle is Red, a Doji, or has a massive upper wick, there is no trigger. PASS.
 
-8-10 (KILL): Perfect "Coil" on Daily + Explosive "Ignition" on Hourly + Sector Support.
+Phase 3: Weigh the Atmosphere (The Tailwinds)
 
-Output Format: You must respond with a strictly valid JSON object. Do not include markdown formatting (like ```json) outside the object.
+Earnings Check: If earnings_proximity is < 48 hours, AUTO-REJECT. The risk is unquantifiable.
+
+Sector Check: If sector_trend is "Bearish" while the stock is breaking out, reduce your conviction score. We prefer swimming with the tide.
+
+Scoring & Output Guidelines
+Conviction Score (0-10):
+
+0-4 (PASS): Missing the Squeeze, weak Hourly trigger, or Earnings risk.
+
+5-7 (WATCH): Good Squeeze, but the Trigger is weak (e.g., waiting for volume) or Sector is resisting.
+
+8-10 (EXECUTE): "Critical/Tight Squeeze" + "Surfing EMA" + "Parabolic Velocity" + "Green Sector".
+
+Response Format: You must respond with a strictly valid JSON object. Do not include markdown code blocks (```json) or conversational filler.
 """
 
 
@@ -874,9 +888,9 @@ async def analyze_stock(request: AnalyzeRequest):
                     conviction_score=0,
                     decision="PASS",
                     analysis=AnalysisDetail(
-                        macro_verdict="Unable to analyze",
-                        micro_verdict="Unable to analyze",
-                        risk_assessment="Analysis failed - agent could not produce valid structured output after multiple attempts."
+                        setup_quality="Unable to analyze",
+                        trigger_quality="Unable to analyze",
+                        risk_factors="Analysis failed - agent could not produce valid structured output after multiple attempts."
                     ),
                     trader_journal="Analysis failed due to structured output error. No trade recommendation possible.",
                     metadata=metadata
@@ -888,9 +902,9 @@ async def analyze_stock(request: AnalyzeRequest):
                     conviction_score=0,
                     decision="PASS",
                     analysis=AnalysisDetail(
-                        macro_verdict="Unable to analyze",
-                        micro_verdict="Unable to analyze",
-                        risk_assessment=f"Analysis failed with status: {proc.result_message.subtype}"
+                        setup_quality="Unable to analyze",
+                        trigger_quality="Unable to analyze",
+                        risk_factors=f"Analysis failed with status: {proc.result_message.subtype}"
                     ),
                     trader_journal="Analysis failed due to an error. No trade recommendation possible.",
                     metadata=metadata

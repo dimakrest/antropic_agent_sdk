@@ -573,11 +573,11 @@ def mock_sdk_client_for_analyze():
             "conviction_score": 8,
             "decision": "EXECUTE_TRADE",
             "analysis": {
-                "macro_verdict": "Daily chart shows tight consolidation near 52-week highs.",
-                "micro_verdict": "Hourly chart shows strong green candle with high volume.",
-                "risk_assessment": "Favorable 1:3 risk/reward ratio."
+                "setup_quality": "Critical Squeeze on Daily. Tight consolidation near 52-week highs with Surfing EMA structure.",
+                "trigger_quality": "Parabolic Velocity on Hourly. Strong green candle sequence with explosive volume.",
+                "risk_factors": "No earnings within 48 hours. Sector trend bullish. Favorable 1:3 risk/reward ratio."
             },
-            "trader_journal": "Energy coiled on daily, explosive ignition on hourly. Sector support present."
+            "trader_journal": "Spring coiled on daily, explosive ignition on hourly. Sector tailwind present - this is a KILL setup."
         }
         yield result_msg
 
@@ -600,9 +600,9 @@ def test_analyze_response_includes_metadata(test_client, mock_sdk_client_for_ana
         assert data["conviction_score"] == 8
         assert data["decision"] == "EXECUTE_TRADE"
         assert "analysis" in data
-        assert data["analysis"]["macro_verdict"] is not None
-        assert data["analysis"]["micro_verdict"] is not None
-        assert data["analysis"]["risk_assessment"] is not None
+        assert data["analysis"]["setup_quality"] is not None
+        assert data["analysis"]["trigger_quality"] is not None
+        assert data["analysis"]["risk_factors"] is not None
         assert data["trader_journal"] is not None
 
         # Verify metadata structure
